@@ -160,6 +160,150 @@ function Dashboard({ name = "Uttakaladeba" }) {
     useState("");
 
   // =====================================================
+  // TASKS
+  // =====================================================
+
+  const [tasks, setTasks] = useState(() => {
+    try {
+      const savedTasks = localStorage.getItem("empair_tasks");
+      return savedTasks ? JSON.parse(savedTasks) : [];
+    } catch (error) {
+      console.error("Failed to load EMPAIR tasks:", error);
+      return [];
+    }
+  });
+
+  const [showTaskForm, setShowTaskForm] = useState(false);
+  const [editingTaskId, setEditingTaskId] = useState(null);
+  const [taskFilter, setTaskFilter] = useState("all");
+  const [taskTitle, setTaskTitle] = useState("");
+  const [taskDescription, setTaskDescription] = useState("");
+  const [taskPriority, setTaskPriority] = useState("medium");
+  const [taskDueDate, setTaskDueDate] = useState("");
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("empair_tasks", JSON.stringify(tasks));
+    } catch (error) {
+      console.error("Failed to save EMPAIR tasks:", error);
+    }
+  }, [tasks]);
+
+  const resetTaskForm = () => {
+    setTaskTitle("");
+    setTaskDescription("");
+    setTaskPriority("medium");
+    setTaskDueDate("");
+    setEditingTaskId(null);
+    setShowTaskForm(false);
+  };
+
+  const openTaskForm = (task = null) => {
+    if (task) {
+      setEditingTaskId(task.id);
+      setTaskTitle(task.title);
+      setTaskDescription(task.description || "");
+      setTaskPriority(task.priority || "medium");
+      setTaskDueDate(task.dueDate || "");
+    } else {
+      setEditingTaskId(null);
+      setTaskTitle("");
+      setTaskDescription("");
+      setTaskPriority("medium");
+      setTaskDueDate("");
+    }
+    setShowTaskForm(true);
+    setActivePage("Tasks");
+  };
+
+  const saveTask = (e) => {
+    e.preventDefault();
+
+    if (!taskTitle.trim()) return;
+
+    if (editingTaskId) {
+      setTasks((previous) =>
+        previous.map((task) =>
+          task.id === editingTaskId
+            ? {
+                ...task,
+                title: taskTitle.trim(),
+                description: taskDescription.trim(),
+                priority: taskPriority,
+                dueDate: taskDueDate,
+              }
+            : task
+        )
+      );
+    } else {
+      setTasks((previous) => [
+        ...previous,
+        {
+          id: Date.now(),
+          title: taskTitle.trim(),
+          description: taskDescription.trim(),
+          priority: taskPriority,
+          dueDate: taskDueDate,
+          completed: false,
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+    }
+
+    resetTaskForm();
+  };
+
+  const toggleTask = (taskId) => {
+    setTasks((previous) =>
+      previous.map((task) =>
+        task.id === taskId
+          ? { ...task, completed: !task.completed }
+          : task
+      )
+    );
+  };
+
+  const deleteTask = (taskId) => {
+    setTasks((previous) => previous.filter((task) => task.id !== taskId));
+  };
+
+  const filteredTasks = tasks.filter((task) => {
+    if (taskFilter === "pending") return !task.completed;
+    if (taskFilter === "completed") return task.completed;
+    return true;
+  });
+
+  const pendingTasks = tasks.filter((task) => !task.completed);
+  const completedTasks = tasks.filter((task) => task.completed);
+
+  const todayTaskCount = tasks.filter(
+    (task) => task.dueDate === getToday()
+  ).length;
+
+  const getPriorityLabel = (priority) => {
+    if (priority === "high") return "HIGH";
+    if (priority === "low") return "LOW";
+    return "MEDIUM";
+  };
+
+  const formatTaskDueDate = (dateString) => {
+    if (!dateString) return "No due date";
+    return parseDate(dateString).toLocaleDateString("en-IN", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    });
+  };
+
+  const isTaskOverdue = (task) => {
+    return (
+      Boolean(task.dueDate) &&
+      task.dueDate < getToday() &&
+      !task.completed
+    );
+  };
+
+  // =====================================================
   // MENU
   // =====================================================
 
@@ -440,7 +584,7 @@ function Dashboard({ name = "Uttakaladeba" }) {
 
 
           <div className="sidebar-version">
-            EMPAIR v0.2
+            EMPAIR v0.3
           </div>
 
         </div>
@@ -607,11 +751,11 @@ function Dashboard({ name = "Uttakaladeba" }) {
                     </span>
 
                     <h3>
-                      5 / 8
+                      {completedTasks.length} / {tasks.length}
                     </h3>
 
                     <p>
-                      3 remaining
+                      {pendingTasks.length} remaining
                     </p>
 
                   </div>
@@ -673,7 +817,10 @@ function Dashboard({ name = "Uttakaladeba" }) {
 
               <div className="quick-actions">
 
-                <button className="quick-action">
+                <button
+                  className="quick-action"
+                  onClick={() => openTaskForm()}
+                >
 
                   <span>
                     ＋
@@ -1774,11 +1921,304 @@ function Dashboard({ name = "Uttakaladeba" }) {
 
 
         {/* =================================================
+            TASKS
+           ================================================= */}
+
+        {activePage === "Tasks" && (
+
+          <section className="tasks-page">
+
+            <div className="tasks-header">
+
+              <div>
+                <span className="dashboard-label">
+                  PERSONAL TASK MANAGER
+                </span>
+
+                <h1>
+                  Tasks
+                </h1>
+
+                <p>
+                  Plan your work, track progress, and stay in control.
+                </p>
+              </div>
+
+              <button
+                className="tasks-add-button"
+                onClick={() => openTaskForm()}
+              >
+                ＋ Add Task
+              </button>
+
+            </div>
+
+            <div className="tasks-summary-grid">
+
+              <div className="task-summary-card">
+                <span>TOTAL</span>
+                <strong>{tasks.length}</strong>
+                <small>All tasks</small>
+              </div>
+
+              <div className="task-summary-card">
+                <span>PENDING</span>
+                <strong>{pendingTasks.length}</strong>
+                <small>Need attention</small>
+              </div>
+
+              <div className="task-summary-card">
+                <span>COMPLETED</span>
+                <strong>{completedTasks.length}</strong>
+                <small>Finished tasks</small>
+              </div>
+
+              <div className="task-summary-card">
+                <span>TODAY</span>
+                <strong>{todayTaskCount}</strong>
+                <small>Due today</small>
+              </div>
+
+            </div>
+
+            {showTaskForm && (
+              <form className="task-form-card" onSubmit={saveTask}>
+
+                <div className="task-form-heading">
+                  <div>
+                    <span>
+                      {editingTaskId ? "EDIT TASK" : "NEW TASK"}
+                    </span>
+                    <h2>
+                      {editingTaskId ? "Update your task" : "Create a task"}
+                    </h2>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="task-form-close"
+                    onClick={resetTaskForm}
+                    aria-label="Close task form"
+                  >
+                    ×
+                  </button>
+                </div>
+
+                <div className="task-form-grid">
+
+                  <label>
+                    <span>Task title</span>
+                    <input
+                      type="text"
+                      value={taskTitle}
+                      onChange={(e) => setTaskTitle(e.target.value)}
+                      placeholder="e.g. Complete C programming assignment"
+                      autoFocus
+                    />
+                  </label>
+
+                  <label>
+                    <span>Priority</span>
+                    <select
+                      value={taskPriority}
+                      onChange={(e) => setTaskPriority(e.target.value)}
+                    >
+                      <option value="high">High</option>
+                      <option value="medium">Medium</option>
+                      <option value="low">Low</option>
+                    </select>
+                  </label>
+
+                  <label className="task-form-full">
+                    <span>Description</span>
+                    <textarea
+                      value={taskDescription}
+                      onChange={(e) => setTaskDescription(e.target.value)}
+                      placeholder="Add some details..."
+                      rows="4"
+                    />
+                  </label>
+
+                  <label>
+                    <span>Due date</span>
+                    <input
+                      type="date"
+                      value={taskDueDate}
+                      onChange={(e) => setTaskDueDate(e.target.value)}
+                    />
+                  </label>
+
+                </div>
+
+                <div className="task-form-actions">
+                  <button
+                    type="button"
+                    className="task-secondary-button"
+                    onClick={resetTaskForm}
+                  >
+                    Cancel
+                  </button>
+
+                  <button type="submit" className="task-primary-button">
+                    {editingTaskId ? "Save Changes" : "Create Task"}
+                  </button>
+                </div>
+
+              </form>
+            )}
+
+            <div className="tasks-list-card">
+
+              <div className="tasks-list-header">
+
+                <div>
+                  <span>TASK LIST</span>
+                  <h2>Your tasks</h2>
+                </div>
+
+                <div className="task-filters">
+                  {[
+                    ["all", "All"],
+                    ["pending", "Pending"],
+                    ["completed", "Completed"],
+                  ].map(([value, label]) => (
+                    <button
+                      key={value}
+                      className={taskFilter === value ? "active" : ""}
+                      onClick={() => setTaskFilter(value)}
+                      type="button"
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+              </div>
+
+              {filteredTasks.length === 0 ? (
+
+                <div className="tasks-empty-state">
+                  <div>✓</div>
+                  <h3>
+                    {taskFilter === "completed"
+                      ? "No completed tasks yet"
+                      : taskFilter === "pending"
+                        ? "No pending tasks"
+                        : "No tasks yet"}
+                  </h3>
+                  <p>
+                    Create your first task and start organizing your day.
+                  </p>
+                  <button
+                    type="button"
+                    className="task-primary-button"
+                    onClick={() => openTaskForm()}
+                  >
+                    ＋ Create Task
+                  </button>
+                </div>
+
+              ) : (
+
+                <div className="tasks-list">
+
+                  {filteredTasks.map((task) => (
+
+                    <article
+                      className={`task-item ${task.completed ? "completed" : ""}`}
+                      key={task.id}
+                    >
+
+                      <button
+                        type="button"
+                        className="task-check-button"
+                        onClick={() => toggleTask(task.id)}
+                        aria-label={task.completed ? "Mark pending" : "Mark complete"}
+                      >
+                        {task.completed ? "✓" : ""}
+                      </button>
+
+                      <div className="task-item-main">
+
+                        <div className="task-item-top">
+
+                          <h3>{task.title}</h3>
+
+                          <span className={`task-priority ${task.priority}`}>
+                            {getPriorityLabel(task.priority)}
+                          </span>
+
+                        </div>
+
+                        {task.description && (
+                          <p>{task.description}</p>
+                        )}
+
+                        <div className="task-item-meta">
+
+                          <span>
+                            {task.dueDate ? "📅 " : "○ "}
+                            {formatTaskDueDate(task.dueDate)}
+                          </span>
+
+                          {isTaskOverdue(task) && (
+                            <span className="task-overdue">
+                              OVERDUE
+                            </span>
+                          )}
+
+                        </div>
+
+                      </div>
+
+                      <div className="task-item-actions">
+
+                        <button
+                          type="button"
+                          onClick={() => openTaskForm(task)}
+                          aria-label="Edit task"
+                          title="Edit task"
+                        >
+                          ✎
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => deleteTask(task.id)}
+                          aria-label="Delete task"
+                          title="Delete task"
+                        >
+                          🗑
+                        </button>
+
+                      </div>
+
+                    </article>
+
+                  ))}
+
+                </div>
+
+              )}
+
+            </div>
+
+            <div className="tasks-storage-note">
+              <strong>Local storage enabled</strong>
+              <span>Your tasks are saved in this browser and persist after refresh.</span>
+            </div>
+
+          </section>
+
+        )}
+
+        {/* =================================================
             OTHER MODULES
            ================================================= */}
 
         {activePage !== "Dashboard" &&
           activePage !== "My Journey" &&
+          activePage !== "Tasks" &&
           activePage !== "Attendance" && (
 
             <section className="page-placeholder">
