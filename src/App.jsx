@@ -3,11 +3,15 @@ import "./index.css";
 import Dashboard from "./components/Dashboard";
 
 function App() {
-  const [isSignup, setIsSignup] = useState(false);
-  const [step, setStep] = useState("email");
+  const savedSession = localStorage.getItem("empair_session");
+  const savedEmail = localStorage.getItem("empair_email") || "";
+  const savedName = localStorage.getItem("empair_name") || "";
 
-  const [email, setEmail] = useState("");
-  const [name, setName] = useState("");
+  const [isSignup, setIsSignup] = useState(false);
+  const [step, setStep] = useState(savedSession ? "dashboard" : "email");
+
+  const [email, setEmail] = useState(savedEmail);
+  const [name, setName] = useState(savedName);
 
   const [otp, setOtp] = useState([
     "",
@@ -84,6 +88,13 @@ function App() {
     }
 
     setMessage("");
+
+    localStorage.setItem("empair_session", "authenticated");
+    localStorage.setItem("empair_email", email.trim());
+
+    if (name.trim()) {
+      localStorage.setItem("empair_name", name.trim());
+    }
 
     setStep("success");
   };
@@ -305,7 +316,7 @@ function App() {
                 </div>
 
                 <div className="panel-version">
-                  PERSONAL LIFE OS · v0.2
+                  PERSONAL LIFE OS · v0.4
                 </div>
 
               </div>

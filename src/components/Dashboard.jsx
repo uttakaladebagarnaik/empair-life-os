@@ -9,6 +9,39 @@ const getToday = () => {
   return `${year}-${month}-${day}`;
 };
 
+const TASKS_API_URL = "http://localhost:5000/api/tasks";
+
+// Temporary test user for v0.4.
+// Real authenticated user ID will be connected in the authentication phase.
+const CURRENT_USER_ID = 1;
+
+const normalizeTaskDueDate = (value) => {
+  if (!value) return "";
+
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return value;
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+};
+
+const normalizeTask = (task) => ({
+  ...task,
+  id: String(task.id),
+  dueDate: normalizeTaskDueDate(task.due_date ?? task.dueDate),
+  completed: Boolean(task.is_completed ?? task.completed),
+});
+
 const parseDate = (dateString) => {
   const [year, month, day] = dateString.split("-").map(Number);
   return new Date(year, month - 1, day);
@@ -163,15 +196,9 @@ function Dashboard({ name = "Uttakaladeba" }) {
   // TASKS
   // =====================================================
 
-  const [tasks, setTasks] = useState(() => {
-    try {
-      const savedTasks = localStorage.getItem("empair_tasks");
-      return savedTasks ? JSON.parse(savedTasks) : [];
-    } catch (error) {
-      console.error("Failed to load EMPAIR tasks:", error);
-      return [];
-    }
-  });
+  const [tasks, setTasks] = useState([]);
+  const [tasksLoading, setTasksLoading] = useState(false);
+  const [tasksError, setTasksError] = useState("");
 
   const [showTaskForm, setShowTaskForm] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState(null);
@@ -181,13 +208,32 @@ function Dashboard({ name = "Uttakaladeba" }) {
   const [taskPriority, setTaskPriority] = useState("medium");
   const [taskDueDate, setTaskDueDate] = useState("");
 
-  useEffect(() => {
+  const loadTasks = async () => {
     try {
-      localStorage.setItem("empair_tasks", JSON.stringify(tasks));
+      setTasksLoading(true);
+      setTasksError("");
+
+      const response = await fetch(TASKS_API_URL);
+
+      if (!response.ok) {
+        throw new Error("Failed to load tasks");
+      }
+
+      const data = await response.json();
+      setTasks((data.tasks || []).map(normalizeTask));
     } catch (error) {
-      console.error("Failed to save EMPAIR tasks:", error);
+      console.error("Failed to load EMPAIR tasks:", error);
+      setTasksError(
+        "Unable to connect to EMPAIR backend. Make sure the server is running on port 5000."
+      );
+    } finally {
+      setTasksLoading(false);
     }
-  }, [tasks]);
+  };
+
+  useEffect(() => {
+    loadTasks();
+  }, []);
 
   const resetTaskForm = () => {
     setTaskTitle("");
@@ -216,55 +262,133 @@ function Dashboard({ name = "Uttakaladeba" }) {
     setActivePage("Tasks");
   };
 
-  const saveTask = (e) => {
+  const saveTask = async (e) => {
     e.preventDefault();
 
     if (!taskTitle.trim()) return;
 
-    if (editingTaskId) {
+    try {
+      setTasksError("");
+
+      const payload = {
+        user_id: CURRENT_USER_ID,
+        title: taskTitle.trim(),
+        description: taskDescription.trim(),
+        priority: taskPriority,
+        due_date: taskDueDate || null,
+      };
+
+      let response;
+
+      if (editingTaskId) {
+        response = await fetch(`${TASKS_API_URL}/${editingTaskId}`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+      } else {
+        response = await fetch(TASKS_API_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+      }
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to save task");
+      }
+
+      if (editingTaskId) {
+        setTasks((previous) =>
+          previous.map((task) =>
+            String(task.id) === String(editingTaskId)
+              ? normalizeTask(data.task)
+              : task
+          )
+        );
+      } else {
+        setTasks((previous) => [normalizeTask(data.task), ...previous]);
+      }
+
+      resetTaskForm();
+    } catch (error) {
+      console.error("Failed to save EMPAIR task:", error);
+      setTasksError(
+        error.message || "Unable to save task. Please try again."
+      );
+    }
+  };
+
+  const toggleTask = async (taskId) => {
+    const currentTask = tasks.find(
+      (task) => String(task.id) === String(taskId)
+    );
+
+    if (!currentTask) return;
+
+    try {
+      setTasksError("");
+
+      const response = await fetch(`${TASKS_API_URL}/${taskId}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          is_completed: !currentTask.completed,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to update task");
+      }
+
       setTasks((previous) =>
         previous.map((task) =>
-          task.id === editingTaskId
-            ? {
-                ...task,
-                title: taskTitle.trim(),
-                description: taskDescription.trim(),
-                priority: taskPriority,
-                dueDate: taskDueDate,
-              }
+          String(task.id) === String(taskId)
+            ? normalizeTask(data.task)
             : task
         )
       );
-    } else {
-      setTasks((previous) => [
-        ...previous,
-        {
-          id: Date.now(),
-          title: taskTitle.trim(),
-          description: taskDescription.trim(),
-          priority: taskPriority,
-          dueDate: taskDueDate,
-          completed: false,
-          createdAt: new Date().toISOString(),
-        },
-      ]);
+    } catch (error) {
+      console.error("Failed to update EMPAIR task:", error);
+      setTasksError(
+        error.message || "Unable to update task. Please try again."
+      );
     }
-
-    resetTaskForm();
   };
 
-  const toggleTask = (taskId) => {
-    setTasks((previous) =>
-      previous.map((task) =>
-        task.id === taskId
-          ? { ...task, completed: !task.completed }
-          : task
-      )
-    );
-  };
+  const deleteTask = async (taskId) => {
+    try {
+      setTasksError("");
 
-  const deleteTask = (taskId) => {
-    setTasks((previous) => previous.filter((task) => task.id !== taskId));
+      const response = await fetch(`${TASKS_API_URL}/${taskId}`, {
+        method: "DELETE",
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to delete task");
+      }
+
+      setTasks((previous) =>
+        previous.filter((task) => String(task.id) !== String(taskId))
+      );
+    } catch (error) {
+      console.error("Failed to delete EMPAIR task:", error);
+      setTasksError(
+        error.message || "Unable to delete task. Please try again."
+      );
+    }
   };
 
   const filteredTasks = tasks.filter((task) => {
@@ -584,7 +708,7 @@ function Dashboard({ name = "Uttakaladeba" }) {
 
 
           <div className="sidebar-version">
-            EMPAIR v0.3
+            EMPAIR v0.4
           </div>
 
         </div>
@@ -1981,6 +2105,20 @@ function Dashboard({ name = "Uttakaladeba" }) {
 
             </div>
 
+            {tasksError && (
+              <div className="tasks-storage-note">
+                <strong>Backend connection</strong>
+                <span>{tasksError}</span>
+              </div>
+            )}
+
+            {tasksLoading && (
+              <div className="tasks-storage-note">
+                <strong>Loading tasks...</strong>
+                <span>Fetching your tasks from PostgreSQL.</span>
+              </div>
+            )}
+
             {showTaskForm && (
               <form className="task-form-card" onSubmit={saveTask}>
 
@@ -2204,8 +2342,8 @@ function Dashboard({ name = "Uttakaladeba" }) {
             </div>
 
             <div className="tasks-storage-note">
-              <strong>Local storage enabled</strong>
-              <span>Your tasks are saved in this browser and persist after refresh.</span>
+              <strong>PostgreSQL connected</strong>
+              <span>Your tasks are stored through the EMPAIR backend and persist after refresh.</span>
             </div>
 
           </section>
