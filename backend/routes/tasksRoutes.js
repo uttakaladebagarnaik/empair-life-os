@@ -5,24 +5,39 @@ const router = express.Router();
 
 
 // ============================================
-// GET ALL TASKS
+// GET ALL TASKS FOR LOGGED-IN USER
 // ============================================
 
 router.get("/", async (req, res) => {
     try {
+
+        const userId = req.user.userId;
+
+
         const result = await pool.query(
-            `SELECT *
-             FROM tasks
-             ORDER BY created_at DESC`
+            `
+            SELECT *
+            FROM tasks
+            WHERE user_id = $1
+            ORDER BY created_at DESC
+            `,
+            [userId]
         );
+
 
         res.json({
             success: true,
             tasks: result.rows
         });
 
+
     } catch (error) {
-        console.error("GET TASKS ERROR:", error.message);
+
+        console.error(
+            "GET TASKS ERROR:",
+            error.message
+        );
+
 
         res.status(500).json({
             success: false,
@@ -38,29 +53,48 @@ router.get("/", async (req, res) => {
 
 router.get("/:id", async (req, res) => {
     try {
+
         const { id } = req.params;
 
+        const userId = req.user.userId;
+
+
         const result = await pool.query(
-            `SELECT *
-             FROM tasks
-             WHERE id = $1`,
-            [id]
+            `
+            SELECT *
+            FROM tasks
+            WHERE id = $1
+            AND user_id = $2
+            `,
+            [
+                id,
+                userId
+            ]
         );
 
+
         if (result.rows.length === 0) {
+
             return res.status(404).json({
                 success: false,
                 message: "Task not found"
             });
         }
 
+
         res.json({
             success: true,
             task: result.rows[0]
         });
 
+
     } catch (error) {
-        console.error("GET TASK ERROR:", error.message);
+
+        console.error(
+            "GET TASK ERROR:",
+            error.message
+        );
+
 
         res.status(500).json({
             success: false,
@@ -76,34 +110,64 @@ router.get("/:id", async (req, res) => {
 
 router.post("/", async (req, res) => {
     try {
+
+        const userId = req.user.userId;
+
+
         const {
-            user_id,
             title,
             description,
             priority,
             due_date
         } = req.body;
 
-        if (!user_id || !title) {
+
+        // ----------------------------------------
+        // VALIDATION
+        // ----------------------------------------
+
+        if (!title || !title.trim()) {
+
             return res.status(400).json({
                 success: false,
-                message: "user_id and title are required"
+                message: "Task title is required"
             });
         }
 
+
+        // ----------------------------------------
+        // CREATE TASK
+        // ----------------------------------------
+
         const result = await pool.query(
-            `INSERT INTO tasks
-            (user_id, title, description, priority, due_date)
-            VALUES ($1, $2, $3, $4, $5)
-            RETURNING *`,
-            [
+            `
+            INSERT INTO tasks
+            (
                 user_id,
                 title,
+                description,
+                priority,
+                due_date
+            )
+            VALUES
+            (
+                $1,
+                $2,
+                $3,
+                $4,
+                $5
+            )
+            RETURNING *
+            `,
+            [
+                userId,
+                title.trim(),
                 description || null,
                 priority || "medium",
                 due_date || null
             ]
         );
+
 
         res.status(201).json({
             success: true,
@@ -111,8 +175,14 @@ router.post("/", async (req, res) => {
             task: result.rows[0]
         });
 
+
     } catch (error) {
-        console.error("CREATE TASK ERROR:", error.message);
+
+        console.error(
+            "CREATE TASK ERROR:",
+            error.message
+        );
+
 
         res.status(500).json({
             success: false,
@@ -128,7 +198,11 @@ router.post("/", async (req, res) => {
 
 router.put("/:id", async (req, res) => {
     try {
+
         const { id } = req.params;
+
+        const userId = req.user.userId;
+
 
         const {
             title,
@@ -138,33 +212,41 @@ router.put("/:id", async (req, res) => {
             is_completed
         } = req.body;
 
+
         const result = await pool.query(
-            `UPDATE tasks
-             SET
+            `
+            UPDATE tasks
+            SET
                 title = COALESCE($1, title),
                 description = COALESCE($2, description),
                 priority = COALESCE($3, priority),
                 due_date = COALESCE($4, due_date),
                 is_completed = COALESCE($5, is_completed),
                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = $6
-             RETURNING *`,
+            WHERE id = $6
+            AND user_id = $7
+            RETURNING *
+            `,
             [
                 title,
                 description,
                 priority,
                 due_date,
                 is_completed,
-                id
+                id,
+                userId
             ]
         );
 
+
         if (result.rows.length === 0) {
+
             return res.status(404).json({
                 success: false,
                 message: "Task not found"
             });
         }
+
 
         res.json({
             success: true,
@@ -172,8 +254,14 @@ router.put("/:id", async (req, res) => {
             task: result.rows[0]
         });
 
+
     } catch (error) {
-        console.error("UPDATE TASK ERROR:", error.message);
+
+        console.error(
+            "UPDATE TASK ERROR:",
+            error.message
+        );
+
 
         res.status(500).json({
             success: false,
@@ -189,29 +277,48 @@ router.put("/:id", async (req, res) => {
 
 router.delete("/:id", async (req, res) => {
     try {
+
         const { id } = req.params;
 
+        const userId = req.user.userId;
+
+
         const result = await pool.query(
-            `DELETE FROM tasks
-             WHERE id = $1
-             RETURNING *`,
-            [id]
+            `
+            DELETE FROM tasks
+            WHERE id = $1
+            AND user_id = $2
+            RETURNING *
+            `,
+            [
+                id,
+                userId
+            ]
         );
 
+
         if (result.rows.length === 0) {
+
             return res.status(404).json({
                 success: false,
                 message: "Task not found"
             });
         }
 
+
         res.json({
             success: true,
             message: "Task deleted successfully"
         });
 
+
     } catch (error) {
-        console.error("DELETE TASK ERROR:", error.message);
+
+        console.error(
+            "DELETE TASK ERROR:",
+            error.message
+        );
+
 
         res.status(500).json({
             success: false,

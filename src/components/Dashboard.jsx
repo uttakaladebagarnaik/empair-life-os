@@ -11,9 +11,14 @@ const getToday = () => {
 
 const TASKS_API_URL = "http://localhost:5000/api/tasks";
 
-// Temporary test user for v0.4.
-// Real authenticated user ID will be connected in the authentication phase.
-const CURRENT_USER_ID = 1;
+const getCurrentUserId = (userId = "") => {
+  const storedUserId = userId || localStorage.getItem("empair_user_id") || "";
+  return storedUserId ? String(storedUserId) : "";
+};
+
+const getAuthToken = (token = "") => {
+  return token || localStorage.getItem("empair_token") || "";
+};
 
 const normalizeTaskDueDate = (value) => {
   if (!value) return "";
@@ -89,7 +94,12 @@ const getShortDate = (dateString) => {
   });
 };
 
-function Dashboard({ name = "Uttakaladeba" }) {
+function Dashboard({
+  name = "Uttakaladeba",
+  userId = "",
+  token = "",
+  onLogout,
+}) {
   const [activePage, setActivePage] = useState("Dashboard");
 
   const [semesterOpen, setSemesterOpen] = useState(false);
@@ -213,19 +223,31 @@ function Dashboard({ name = "Uttakaladeba" }) {
       setTasksLoading(true);
       setTasksError("");
 
-      const response = await fetch(TASKS_API_URL);
+      const authToken = getAuthToken(token);
 
-      if (!response.ok) {
-        throw new Error("Failed to load tasks");
+      if (!authToken) {
+        setTasks([]);
+        setTasksError("Authentication token not found. Please login again.");
+        return;
       }
 
+      const response = await fetch(TASKS_API_URL, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
+      });
+
       const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to load tasks");
+      }
+
       setTasks((data.tasks || []).map(normalizeTask));
     } catch (error) {
       console.error("Failed to load EMPAIR tasks:", error);
-      setTasksError(
-        "Unable to connect to EMPAIR backend. Make sure the server is running on port 5000."
-      );
+      setTasksError(error.message || "Unable to connect to EMPAIR backend.");
     } finally {
       setTasksLoading(false);
     }
@@ -233,7 +255,7 @@ function Dashboard({ name = "Uttakaladeba" }) {
 
   useEffect(() => {
     loadTasks();
-  }, []);
+  }, [token, userId]);
 
   const resetTaskForm = () => {
     setTaskTitle("");
@@ -269,34 +291,36 @@ function Dashboard({ name = "Uttakaladeba" }) {
 
     try {
       setTasksError("");
+      const authToken = getAuthToken(token);
+
+      if (!authToken) {
+        throw new Error("Authentication token not found. Please login again.");
+      }
 
       const payload = {
-        user_id: CURRENT_USER_ID,
         title: taskTitle.trim(),
         description: taskDescription.trim(),
         priority: taskPriority,
         due_date: taskDueDate || null,
       };
 
-      let response;
-
-      if (editingTaskId) {
-        response = await fetch(`${TASKS_API_URL}/${editingTaskId}`, {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(payload),
-        });
-      } else {
-        response = await fetch(TASKS_API_URL, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(payload),
-        });
-      }
+      const response = editingTaskId
+        ? await fetch(`${TASKS_API_URL}/${editingTaskId}`, {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${authToken}`,
+            },
+            body: JSON.stringify(payload),
+          })
+        : await fetch(TASKS_API_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${authToken}`,
+            },
+            body: JSON.stringify(payload),
+          });
 
       const data = await response.json();
 
@@ -305,13 +329,9 @@ function Dashboard({ name = "Uttakaladeba" }) {
       }
 
       if (editingTaskId) {
-        setTasks((previous) =>
-          previous.map((task) =>
-            String(task.id) === String(editingTaskId)
-              ? normalizeTask(data.task)
-              : task
-          )
-        );
+        setTasks((previous) => previous.map((task) =>
+          String(task.id) === String(editingTaskId) ? normalizeTask(data.task) : task
+        ));
       } else {
         setTasks((previous) => [normalizeTask(data.task), ...previous]);
       }
@@ -319,26 +339,27 @@ function Dashboard({ name = "Uttakaladeba" }) {
       resetTaskForm();
     } catch (error) {
       console.error("Failed to save EMPAIR task:", error);
-      setTasksError(
-        error.message || "Unable to save task. Please try again."
-      );
+      setTasksError(error.message || "Unable to save task. Please try again.");
     }
   };
 
   const toggleTask = async (taskId) => {
-    const currentTask = tasks.find(
-      (task) => String(task.id) === String(taskId)
-    );
-
+    const currentTask = tasks.find((task) => String(task.id) === String(taskId));
     if (!currentTask) return;
 
     try {
       setTasksError("");
+      const authToken = getAuthToken(token);
+
+      if (!authToken) {
+        throw new Error("Authentication token not found. Please login again.");
+      }
 
       const response = await fetch(`${TASKS_API_URL}/${taskId}`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
         },
         body: JSON.stringify({
           is_completed: !currentTask.completed,
@@ -351,27 +372,29 @@ function Dashboard({ name = "Uttakaladeba" }) {
         throw new Error(data.message || "Failed to update task");
       }
 
-      setTasks((previous) =>
-        previous.map((task) =>
-          String(task.id) === String(taskId)
-            ? normalizeTask(data.task)
-            : task
-        )
-      );
+      setTasks((previous) => previous.map((task) =>
+        String(task.id) === String(taskId) ? normalizeTask(data.task) : task
+      ));
     } catch (error) {
       console.error("Failed to update EMPAIR task:", error);
-      setTasksError(
-        error.message || "Unable to update task. Please try again."
-      );
+      setTasksError(error.message || "Unable to update task. Please try again.");
     }
   };
 
   const deleteTask = async (taskId) => {
     try {
       setTasksError("");
+      const authToken = getAuthToken(token);
+
+      if (!authToken) {
+        throw new Error("Authentication token not found. Please login again.");
+      }
 
       const response = await fetch(`${TASKS_API_URL}/${taskId}`, {
         method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
       });
 
       const data = await response.json();
@@ -380,14 +403,10 @@ function Dashboard({ name = "Uttakaladeba" }) {
         throw new Error(data.message || "Failed to delete task");
       }
 
-      setTasks((previous) =>
-        previous.filter((task) => String(task.id) !== String(taskId))
-      );
+      setTasks((previous) => previous.filter((task) => String(task.id) !== String(taskId)));
     } catch (error) {
       console.error("Failed to delete EMPAIR task:", error);
-      setTasksError(
-        error.message || "Unable to delete task. Please try again."
-      );
+      setTasksError(error.message || "Unable to delete task. Please try again.");
     }
   };
 
@@ -707,8 +726,21 @@ function Dashboard({ name = "Uttakaladeba" }) {
           </button>
 
 
+          <button
+            className="nav-item logout-button"
+            onClick={onLogout}
+            type="button"
+          >
+            <span>
+              ↪
+            </span>
+
+            Logout
+          </button>
+
+
           <div className="sidebar-version">
-            EMPAIR v0.4
+            EMPAIR v0.5
           </div>
 
         </div>

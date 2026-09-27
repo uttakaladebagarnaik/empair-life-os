@@ -6,12 +6,18 @@ function App() {
   const savedSession = localStorage.getItem("empair_session");
   const savedEmail = localStorage.getItem("empair_email") || "";
   const savedName = localStorage.getItem("empair_name") || "";
+  const savedUserId = localStorage.getItem("empair_user_id") || "";
+  const savedToken = localStorage.getItem("empair_token") || "";
 
   const [isSignup, setIsSignup] = useState(false);
   const [step, setStep] = useState(savedSession ? "dashboard" : "email");
 
   const [email, setEmail] = useState(savedEmail);
   const [name, setName] = useState(savedName);
+  const [userId, setUserId] = useState(savedUserId);
+  const [token, setToken] = useState(savedToken);
+  const [password, setPassword] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
 
   const [otp, setOtp] = useState([
     "",
@@ -28,7 +34,7 @@ function App() {
   // EMAIL → OTP
   // ================================
 
-  const handleContinue = (e) => {
+  const handleContinue = async (e) => {
     e.preventDefault();
 
     if (isSignup && !name.trim()) {
@@ -41,8 +47,87 @@ function App() {
       return;
     }
 
-    setMessage("");
-    setStep("otp");
+    if (!password) {
+      setMessage("Please enter your password.");
+      return;
+    }
+
+    if (password.length < 8) {
+      setMessage("Password must be at least 8 characters long.");
+      return;
+    }
+
+    try {
+      setAuthLoading(true);
+      setMessage("");
+
+      const endpoint = isSignup
+        ? "http://localhost:5000/api/auth/register"
+        : "http://localhost:5000/api/auth/login";
+
+      const body = isSignup
+        ? {
+            name: name.trim(),
+            email: email.trim(),
+            password,
+          }
+        : {
+            email: email.trim(),
+            password,
+          };
+
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.message || "Authentication failed."
+        );
+      }
+
+      const authenticatedUser = data.user;
+
+      if (!authenticatedUser) {
+        throw new Error("User information was not returned by the server.");
+      }
+
+      const authenticatedUserId = String(authenticatedUser.id);
+      const authenticatedName = authenticatedUser.name || name.trim();
+      const authenticatedEmail = authenticatedUser.email || email.trim();
+      const authenticatedToken = data.token;
+
+      if (!authenticatedToken) {
+        throw new Error("Authentication token was not returned by the server.");
+      }
+
+      setUserId(authenticatedUserId);
+      setToken(authenticatedToken);
+      setName(authenticatedName);
+      setEmail(authenticatedEmail);
+      setPassword("");
+
+      localStorage.setItem("empair_session", "authenticated");
+      localStorage.setItem("empair_user_id", authenticatedUserId);
+      localStorage.setItem("empair_token", authenticatedToken);
+      localStorage.setItem("empair_email", authenticatedEmail);
+      localStorage.setItem("empair_name", authenticatedName);
+
+      setStep("dashboard");
+    } catch (error) {
+      console.error("EMPAIR authentication error:", error);
+      setMessage(
+        error.message || "Unable to connect to EMPAIR backend."
+      );
+    } finally {
+      setAuthLoading(false);
+    }
   };
 
 
@@ -96,8 +181,43 @@ function App() {
       localStorage.setItem("empair_name", name.trim());
     }
 
+    if (userId) {
+      localStorage.setItem("empair_user_id", userId);
+    }
+
     setStep("success");
   };
+
+
+  // ================================
+  // LOGOUT
+  // ================================
+
+  const handleLogout = () => {
+    localStorage.removeItem("empair_session");
+    localStorage.removeItem("empair_user_id");
+    localStorage.removeItem("empair_token");
+    localStorage.removeItem("empair_email");
+    localStorage.removeItem("empair_name");
+
+    setUserId("");
+    setToken("");
+    setPassword("");
+    setEmail("");
+    setName("");
+    setMessage("");
+    setOtp([
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+    ]);
+    setStep("email");
+    setIsSignup(false);
+  };
+
 
 
   // ================================
@@ -160,6 +280,9 @@ function App() {
             ? name
             : "Uttakaladeba"
         }
+        userId={userId}
+        token={token}
+        onLogout={handleLogout}
       />
     );
   }
@@ -316,7 +439,7 @@ function App() {
                 </div>
 
                 <div className="panel-version">
-                  PERSONAL LIFE OS · v0.4
+                  PERSONAL LIFE OS · v0.5
                 </div>
 
               </div>
@@ -404,6 +527,29 @@ function App() {
                   </div>
 
 
+                  {/* Password */}
+
+                  <div className="field">
+
+                    <label htmlFor="password">
+                      PASSWORD
+                    </label>
+
+                    <input
+                      id="password"
+                      type="password"
+                      value={password}
+                      onChange={(e) =>
+                        setPassword(e.target.value)
+                      }
+                      placeholder="Enter your password"
+                      minLength={8}
+                      autoComplete={isSignup ? "new-password" : "current-password"}
+                    />
+
+                  </div>
+
+
                   {message && (
 
                     <div className="error-message">
@@ -416,11 +562,14 @@ function App() {
                   <button
                     className="continue-button"
                     type="submit"
+                    disabled={authLoading}
                   >
 
                     <span>
 
-                      {isSignup
+                      {authLoading
+                        ? "CONNECTING..."
+                        : isSignup
                         ? "CREATE ACCOUNT"
                         : "CONTINUE"}
 
