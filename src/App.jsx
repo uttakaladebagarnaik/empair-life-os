@@ -1,16 +1,15 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import "./index.css";
 import Dashboard from "./components/Dashboard";
 
 function App() {
-  const savedSession = localStorage.getItem("empair_session");
   const savedEmail = localStorage.getItem("empair_email") || "";
   const savedName = localStorage.getItem("empair_name") || "";
   const savedUserId = localStorage.getItem("empair_user_id") || "";
   const savedToken = localStorage.getItem("empair_token") || "";
 
   const [isSignup, setIsSignup] = useState(false);
-  const [step, setStep] = useState(savedSession ? "dashboard" : "email");
+  const [step, setStep] = useState("email");
 
   const [email, setEmail] = useState(savedEmail);
   const [name, setName] = useState(savedName);
@@ -18,6 +17,7 @@ function App() {
   const [token, setToken] = useState(savedToken);
   const [password, setPassword] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
+  const [sessionChecking, setSessionChecking] = useState(true);
 
   const [otp, setOtp] = useState([
     "",
@@ -29,6 +29,73 @@ function App() {
   ]);
 
   const [message, setMessage] = useState("");
+
+  // ================================
+  // RESTORE AUTHENTICATED SESSION
+  // ================================
+
+  useEffect(() => {
+    const restoreSession = async () => {
+      const savedToken = localStorage.getItem("empair_token");
+
+      if (!savedToken) {
+        setSessionChecking(false);
+        return;
+      }
+
+      try {
+        const response = await fetch(
+          "http://localhost:5000/api/auth/me",
+          {
+            headers: {
+              Authorization: `Bearer ${savedToken}`,
+            },
+          }
+        );
+
+        const data = await response.json();
+
+        if (!response.ok || !data.success || !data.user) {
+          throw new Error(data.message || "Session expired.");
+        }
+
+        const restoredUser = data.user;
+        const restoredUserId = String(restoredUser.id);
+        const restoredName = restoredUser.name || "";
+        const restoredEmail = restoredUser.email || "";
+
+        setUserId(restoredUserId);
+        setName(restoredName);
+        setEmail(restoredEmail);
+        setToken(savedToken);
+
+        localStorage.setItem("empair_session", "authenticated");
+        localStorage.setItem("empair_user_id", restoredUserId);
+        localStorage.setItem("empair_name", restoredName);
+        localStorage.setItem("empair_email", restoredEmail);
+
+        setStep("dashboard");
+      } catch (error) {
+        console.error("SESSION RESTORE ERROR:", error);
+
+        localStorage.removeItem("empair_session");
+        localStorage.removeItem("empair_user_id");
+        localStorage.removeItem("empair_token");
+        localStorage.removeItem("empair_email");
+        localStorage.removeItem("empair_name");
+
+        setUserId("");
+        setToken("");
+        setName("");
+        setEmail("");
+        setStep("email");
+      } finally {
+        setSessionChecking(false);
+      }
+    };
+
+    restoreSession();
+  }, []);
 
   // ================================
   // EMAIL → OTP
@@ -267,6 +334,23 @@ function App() {
     setMessage("");
   };
 
+
+  // ================================
+  // SESSION CHECKING
+  // ================================
+
+  if (sessionChecking) {
+    return (
+      <div className="auth-page">
+        <div className="auth-panel">
+          <div className="auth-heading">
+            <h2>Restoring your space...</h2>
+            <p>Verifying your secure EMPAIR session.</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // ================================
   // DASHBOARD

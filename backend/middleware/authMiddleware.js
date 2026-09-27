@@ -1,17 +1,7 @@
 const jwt = require("jsonwebtoken");
 
-
-// ============================================
-// AUTHENTICATION MIDDLEWARE
-// ============================================
-
 const authenticateToken = (req, res, next) => {
   try {
-
-    // ----------------------------------------
-    // GET AUTHORIZATION HEADER
-    // ----------------------------------------
-
     const authHeader = req.headers.authorization;
 
 
@@ -22,28 +12,16 @@ const authenticateToken = (req, res, next) => {
       });
     }
 
-
-    // ----------------------------------------
-    // CHECK BEARER FORMAT
-    // ----------------------------------------
-
     const parts = authHeader.split(" ");
 
-
-    if (
-      parts.length !== 2 ||
-      parts[0] !== "Bearer"
-    ) {
+    if (parts.length !== 2 || parts[0] !== "Bearer") {
       return res.status(401).json({
         success: false,
-        message:
-          "Invalid authorization format. Use Bearer <token>",
+        message: "Invalid authorization format. Use Bearer <token>",
       });
     }
 
-
     const token = parts[1];
-
 
     if (!token) {
       return res.status(401).json({
@@ -52,38 +30,20 @@ const authenticateToken = (req, res, next) => {
       });
     }
 
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    // ----------------------------------------
-    // VERIFY JWT
-    // ----------------------------------------
+      req.user = decoded;
+      next();
+    } catch (verifyError) {
+      console.log("JWT VERIFY ERROR NAME:", verifyError.name);
+      console.log("JWT VERIFY ERROR MESSAGE:", verifyError.message);
 
-    const decoded = jwt.verify(
-      token,
-      process.env.JWT_SECRET
-    );
-
-
-    // ----------------------------------------
-    // ATTACH USER TO REQUEST
-    // ----------------------------------------
-
-    req.user = decoded;
-
-
-    // ----------------------------------------
-    // CONTINUE REQUEST
-    // ----------------------------------------
-
-    next();
-
+      throw verifyError;
+    }
 
   } catch (error) {
-
-    console.error(
-      "AUTH MIDDLEWARE ERROR:",
-      error.message
-    );
-
+    console.error("AUTH MIDDLEWARE ERROR:", error.message);
 
     if (error.name === "TokenExpiredError") {
       return res.status(401).json({
@@ -92,7 +52,6 @@ const authenticateToken = (req, res, next) => {
       });
     }
 
-
     if (error.name === "JsonWebTokenError") {
       return res.status(401).json({
         success: false,
@@ -100,13 +59,11 @@ const authenticateToken = (req, res, next) => {
       });
     }
 
-
     return res.status(401).json({
       success: false,
       message: "Authentication failed",
     });
   }
 };
-
 
 module.exports = authenticateToken;
