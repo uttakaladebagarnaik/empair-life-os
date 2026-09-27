@@ -10,6 +10,7 @@ const getToday = () => {
 };
 
 const TASKS_API_URL = "http://localhost:5000/api/tasks";
+const ATTENDANCE_API_URL = "http://localhost:5000/api/attendance";
 
 const getCurrentUserId = (userId = "") => {
   const storedUserId = userId || localStorage.getItem("empair_user_id") || "";
@@ -108,99 +109,109 @@ function Dashboard({
   // DAILY ROUTINE / ATTENDANCE DATA
   // =====================================================
 
-  const [dailyRoutine, setDailyRoutine] = useState(() => {
+  const [dailyRoutine, setDailyRoutine] = useState({});
+  const [attendanceLoading, setAttendanceLoading] = useState(false);
+  const [attendanceError, setAttendanceError] = useState("");
+
+  const [selectedDate, setSelectedDate] = useState(
+    () =>
+      localStorage.getItem("empair_selected_date") ||
+      getToday()
+  );
+
+  const [showAddSubject, setShowAddSubject] = useState(false);
+  const [newSubjectName, setNewSubjectName] = useState("");
+  const [newSubjectCode, setNewSubjectCode] = useState("");
+
+  const loadAttendance = async () => {
     try {
-      const savedRoutine = localStorage.getItem("empair_daily_routine");
-      if (savedRoutine) {
-        return JSON.parse(savedRoutine);
+      setAttendanceLoading(true);
+      setAttendanceError("");
+
+      const authToken = getAuthToken(token);
+
+      if (!authToken) {
+        setDailyRoutine({});
+        setAttendanceError(
+          "Authentication token not found. Please login again."
+        );
+        return;
       }
+
+      const response = await fetch(ATTENDANCE_API_URL, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.message || "Failed to load attendance"
+        );
+      }
+
+      const groupedAttendance = {};
+
+      (data.attendance || []).forEach((record) => {
+        const date = String(record.attendance_date).slice(0, 10);
+
+        if (!groupedAttendance[date]) {
+          groupedAttendance[date] = [];
+        }
+
+        groupedAttendance[date].push({
+          id: String(record.id),
+          name: record.subject,
+          code: record.subject
+            .substring(0, 4)
+            .toUpperCase(),
+          status: record.status,
+        });
+      });
+
+      setDailyRoutine(groupedAttendance);
     } catch (error) {
-      console.error("Failed to load EMPAIR routine:", error);
+      console.error(
+        "Failed to load EMPAIR attendance:",
+        error
+      );
+
+      setAttendanceError(
+        error.message ||
+        "Unable to connect to EMPAIR attendance backend."
+      );
+    } finally {
+      setAttendanceLoading(false);
     }
-
-    return {
-    "2026-09-25": [
-      {
-        id: 1,
-        name: "Universal Human Values",
-        code: "UHV",
-        status: "pending",
-      },
-      {
-        id: 2,
-        name: "Engineering Chemistry",
-        code: "CHEM",
-        status: "pending",
-      },
-      {
-        id: 3,
-        name: "Engineering Mathematics",
-        code: "MATH",
-        status: "pending",
-      },
-      {
-        id: 4,
-        name: "Programming in C",
-        code: "PC",
-        status: "pending",
-      },
-    ],
-
-    "2026-09-26": [
-      {
-        id: 5,
-        name: "Basic Mechanical Engineering",
-        code: "BME",
-        status: "pending",
-      },
-      {
-        id: 6,
-        name: "Basic Electrical Engineering",
-        code: "BE",
-        status: "pending",
-      },
-    ],
-    };
-  });
+  };
 
   useEffect(() => {
-    try {
-      localStorage.setItem(
-        "empair_daily_routine",
-        JSON.stringify(dailyRoutine)
-      );
-    } catch (error) {
-      console.error("Failed to save EMPAIR routine:", error);
-    }
-  }, [dailyRoutine]);
+    loadAttendance();
+  }, [token, userId]);
 
-  const [selectedDate, setSelectedDate] =
-    useState(() => localStorage.getItem("empair_selected_date") || getToday());
+  useEffect(() => {
+    localStorage.setItem(
+      "empair_selected_date",
+      selectedDate
+    );
+  }, [selectedDate]);
 
   const visibleDates = getDateRange(selectedDate, 7);
 
   const moveDateWindow = (direction) => {
     const current = parseDate(selectedDate);
-    current.setDate(current.getDate() + direction * 7);
+    current.setDate(
+      current.getDate() + direction * 7
+    );
     setSelectedDate(formatDate(current));
   };
 
   const goToToday = () => {
     setSelectedDate(getToday());
   };
-
-  useEffect(() => {
-    localStorage.setItem("empair_selected_date", selectedDate);
-  }, [selectedDate]);
-
-  const [showAddSubject, setShowAddSubject] =
-    useState(false);
-
-  const [newSubjectName, setNewSubjectName] =
-    useState("");
-
-  const [newSubjectCode, setNewSubjectCode] =
-    useState("");
 
   // =====================================================
   // TASKS
@@ -509,78 +520,201 @@ function Dashboard({
   // ADD SUBJECT
   // =====================================================
 
-  const addSubject = (e) => {
+  const addSubject = async (e) => {
     e.preventDefault();
 
     if (!newSubjectName.trim()) {
       return;
     }
 
-    const newSubject = {
-      id: Date.now(),
-      name: newSubjectName.trim(),
-      code:
-        newSubjectCode.trim() ||
-        newSubjectName
-          .trim()
-          .substring(0, 4)
-          .toUpperCase(),
-      status: "pending",
-    };
+    try {
+      setAttendanceError("");
 
-    setDailyRoutine((previous) => ({
-      ...previous,
+      const authToken = getAuthToken(token);
 
-      [selectedDate]: [
-        ...(previous[selectedDate] || []),
-        newSubject,
-      ],
-    }));
+      if (!authToken) {
+        throw new Error(
+          "Authentication token not found. Please login again."
+        );
+      }
 
-    setNewSubjectName("");
-    setNewSubjectCode("");
-    setShowAddSubject(false);
+      const response = await fetch(
+        ATTENDANCE_API_URL,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({
+            subject: newSubjectName.trim(),
+            attendance_date: selectedDate,
+            status: "pending",
+          }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.message || "Failed to add attendance"
+        );
+      }
+
+      const record = data.attendance;
+
+      const newSubject = {
+        id: String(record.id),
+        name: record.subject,
+        code:
+          newSubjectCode.trim() ||
+          record.subject.substring(0, 4).toUpperCase(),
+        status: record.status,
+      };
+
+      setDailyRoutine((previous) => ({
+        ...previous,
+        [selectedDate]: [
+          ...(previous[selectedDate] || []),
+          newSubject,
+        ],
+      }));
+
+      setNewSubjectName("");
+      setNewSubjectCode("");
+      setShowAddSubject(false);
+    } catch (error) {
+      console.error(
+        "Failed to add attendance:",
+        error
+      );
+
+      setAttendanceError(
+        error.message || "Unable to add attendance."
+      );
+    }
   };
 
   // =====================================================
   // DELETE SUBJECT
   // =====================================================
 
-  const deleteSubject = (subjectId) => {
-    setDailyRoutine((previous) => ({
-      ...previous,
+  const deleteSubject = async (subjectId) => {
+    try {
+      setAttendanceError("");
 
-      [selectedDate]: (
-        previous[selectedDate] || []
-      ).filter(
-        (subject) =>
-          subject.id !== subjectId
-      ),
-    }));
+      const authToken = getAuthToken(token);
+
+      if (!authToken) {
+        throw new Error(
+          "Authentication token not found. Please login again."
+        );
+      }
+
+      const response = await fetch(
+        `${ATTENDANCE_API_URL}/${subjectId}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+          },
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.message || "Failed to delete attendance"
+        );
+      }
+
+      setDailyRoutine((previous) => ({
+        ...previous,
+        [selectedDate]: (
+          previous[selectedDate] || []
+        ).filter(
+          (subject) =>
+            String(subject.id) !== String(subjectId)
+        ),
+      }));
+    } catch (error) {
+      console.error(
+        "Failed to delete attendance:",
+        error
+      );
+
+      setAttendanceError(
+        error.message || "Unable to delete attendance."
+      );
+    }
   };
 
   // =====================================================
   // MARK ATTENDANCE
   // =====================================================
 
-  const markAttendance = (
+  const markAttendance = async (
     subjectId,
     status
   ) => {
-    setDailyRoutine((previous) => ({
-      ...previous,
+    try {
+      setAttendanceError("");
 
-      [selectedDate]: (
-        previous[selectedDate] || []
-      ).map((subject) =>
-        subject.id === subjectId
-          ? {
-              ...subject,
-              status,
-            }
-          : subject
-      ),
-    }));
+      const authToken = getAuthToken(token);
+
+      if (!authToken) {
+        throw new Error(
+          "Authentication token not found. Please login again."
+        );
+      }
+
+      const response = await fetch(
+        `${ATTENDANCE_API_URL}/${subjectId}`,
+        {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({
+            status,
+          }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.message || "Failed to update attendance"
+        );
+      }
+
+      setDailyRoutine((previous) => ({
+        ...previous,
+        [selectedDate]: (
+          previous[selectedDate] || []
+        ).map((subject) =>
+          String(subject.id) === String(subjectId)
+            ? {
+                ...subject,
+                status,
+              }
+            : subject
+        ),
+      }));
+    } catch (error) {
+      console.error(
+        "Failed to update attendance:",
+        error
+      );
+
+      setAttendanceError(
+        error.message || "Unable to update attendance."
+      );
+    }
   };
 
   // =====================================================
@@ -740,7 +874,7 @@ function Dashboard({
 
 
           <div className="sidebar-version">
-            EMPAIR v0.5
+            EMPAIR v0.8
           </div>
 
         </div>
@@ -1659,6 +1793,22 @@ function Dashboard({
 
             </div>
 
+
+            {attendanceError && (
+              <div className="tasks-storage-note">
+                <strong>Attendance Backend</strong>
+                <span>{attendanceError}</span>
+              </div>
+            )}
+
+            {attendanceLoading && (
+              <div className="tasks-storage-note">
+                <strong>Loading attendance...</strong>
+                <span>
+                  Fetching your attendance from PostgreSQL.
+                </span>
+              </div>
+            )}
 
             {/* DATE SELECTOR */}
 

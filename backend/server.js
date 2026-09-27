@@ -6,6 +6,7 @@ const pool = require("./config/db");
 
 const tasksRoutes = require("./routes/tasksRoutes");
 const authRoutes = require("./routes/authRoutes");
+const attendanceRoutes = require("./routes/attendanceRoutes");
 
 const authenticateToken = require("./middleware/authMiddleware");
 
@@ -13,6 +14,10 @@ const app = express();
 
 const PORT = process.env.PORT || 5000;
 
+
+// ============================================
+// MIDDLEWARE
+// ============================================
 
 app.use(cors());
 app.use(express.json());
@@ -26,7 +31,7 @@ app.get("/", (req, res) => {
     res.json({
         success: true,
         message: "EMPAIR Backend is running 🚀",
-        version: "v0.6.0"
+        version: "v0.8.0"
     });
 });
 
@@ -85,6 +90,29 @@ app.use(
     authenticateToken,
     tasksRoutes
 );
+
+
+// ============================================
+// PROTECTED ATTENDANCE ROUTES
+// ============================================
+
+app.use(
+    "/api/attendance",
+    authenticateToken,
+    attendanceRoutes
+);
+
+
+// ============================================
+// 404 HANDLER
+// ============================================
+
+app.use((req, res) => {
+    res.status(404).json({
+        success: false,
+        message: "Route not found"
+    });
+});
 
 
 // ============================================
