@@ -3876,3 +3876,353 @@
     margin-left: 37px;
   }
 }
+
+/* =====================================================
+   MY JOURNEY — ACHIEVEMENTS / GOOGLE DRIVE STORAGE
+   Premium card layout override
+   ===================================================== */
+
+.journey-page .semester-section:has(.journey-achievement-filters) {
+  position: relative;
+}
+
+.journey-page .semester-section:has(.journey-achievement-filters) > .tasks-storage-note {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 15px 18px;
+  margin: 0 0 16px;
+  border-radius: 15px;
+  background: linear-gradient(135deg, rgba(67, 239, 198, 0.055), rgba(92, 101, 255, 0.045));
+  border: 1px solid rgba(67, 239, 198, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.025);
+}
+
+.journey-page .semester-section:has(.journey-achievement-filters) > .tasks-storage-note strong {
+  flex-shrink: 0;
+  color: #55e6ca;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+}
+
+.journey-page .semester-section:has(.journey-achievement-filters) > .tasks-storage-note span {
+  color: #73798b;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.journey-achievement-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 5px;
+  margin: 0 0 16px;
+  border-radius: 14px;
+  background: rgba(255,255,255,0.025);
+  border: 1px solid rgba(255,255,255,0.055);
+  width: fit-content;
+  max-width: 100%;
+}
+
+.journey-filter-button {
+  appearance: none;
+  border: 1px solid transparent;
+  outline: none;
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 10px;
+  color: #777d8f;
+  background: transparent;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.15px;
+  cursor: pointer;
+  transition: transform 0.18s ease, color 0.18s ease, background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.journey-filter-button:hover {
+  color: #dfe2ee;
+  background: rgba(255,255,255,0.045);
+  border-color: rgba(255,255,255,0.065);
+  transform: translateY(-1px);
+}
+
+.journey-filter-button.active {
+  color: #ffffff;
+  background: linear-gradient(135deg, #5e5cf6, #7758ff);
+  border-color: rgba(157,150,255,0.42);
+  box-shadow: 0 8px 22px rgba(92,88,255,0.22), inset 0 1px 0 rgba(255,255,255,0.13);
+}
+
+.journey-filter-button.active:hover {
+  background: linear-gradient(135deg, #6865ff, #805fff);
+  transform: translateY(-1px);
+}
+
+.journey-achievement-filters + .tasks-list {
+  gap: 13px;
+}
+
+.journey-achievement-filters + .tasks-list .task-item {
+  position: relative;
+  align-items: flex-start;
+  gap: 16px;
+  min-height: 148px;
+  padding: 20px;
+  border-radius: 18px;
+  background:
+    linear-gradient(145deg, rgba(20,22,34,0.96), rgba(12,14,22,0.96));
+  border: 1px solid rgba(255,255,255,0.065);
+  box-shadow: 0 10px 32px rgba(0,0,0,0.14), inset 0 1px 0 rgba(255,255,255,0.018);
+  overflow: hidden;
+}
+
+.journey-achievement-filters + .tasks-list .task-item::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 16px;
+  bottom: 16px;
+  width: 3px;
+  border-radius: 0 5px 5px 0;
+  background: linear-gradient(180deg, #6d5dfc, #28d8c6);
+  opacity: 0.9;
+}
+
+.journey-achievement-filters + .tasks-list .task-item::after {
+  content: "";
+  position: absolute;
+  width: 180px;
+  height: 180px;
+  right: -100px;
+  top: -110px;
+  border-radius: 50%;
+  background: rgba(101,91,255,0.08);
+  filter: blur(18px);
+  pointer-events: none;
+}
+
+.journey-achievement-filters + .tasks-list .task-item:hover {
+  transform: translateY(-3px);
+  background: linear-gradient(145deg, rgba(24,26,41,0.98), rgba(14,16,27,0.98));
+  border-color: rgba(108,116,255,0.24);
+  box-shadow: 0 18px 42px rgba(0,0,0,0.22), 0 0 0 1px rgba(100,94,255,0.035) inset;
+}
+
+.journey-achievement-filters + .tasks-list .task-check-button {
+  position: relative;
+  z-index: 1;
+  width: 48px;
+  height: 48px;
+  margin-top: 1px;
+  border-radius: 14px;
+  border: 1px solid rgba(105,112,255,0.22);
+  background: linear-gradient(145deg, rgba(91,96,255,0.16), rgba(91,96,255,0.055));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.055), 0 8px 20px rgba(0,0,0,0.16);
+  font-size: 19px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.journey-achievement-filters + .tasks-list .task-item-main {
+  position: relative;
+  z-index: 1;
+  padding-top: 1px;
+}
+
+.journey-achievement-filters + .tasks-list .task-item-top {
+  gap: 10px;
+}
+
+.journey-achievement-filters + .tasks-list .task-item-top h3 {
+  color: #f1f2f7;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.35px;
+}
+
+.journey-achievement-filters + .tasks-list .task-priority {
+  padding: 5px 9px;
+  border-radius: 999px;
+  color: #c4bdff;
+  background: rgba(103,91,255,0.11);
+  border: 1px solid rgba(111,99,255,0.16);
+  font-size: 7px;
+  letter-spacing: 1px;
+}
+
+.journey-achievement-filters + .tasks-list .task-item-main > p {
+  max-width: 760px;
+  margin: 9px 0 0;
+  color: #7d8293;
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+.journey-achievement-filters + .tasks-list .task-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 13px;
+}
+
+.journey-achievement-filters + .tasks-list .task-item-meta span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 9px;
+  border-radius: 8px;
+  color: #72788a;
+  background: rgba(255,255,255,0.028);
+  border: 1px solid rgba(255,255,255,0.045);
+  font-size: 9px;
+}
+
+.journey-achievement-filters + .tasks-list .task-item-meta span:last-child {
+  color: #58d8c5;
+  background: rgba(63,218,193,0.045);
+  border-color: rgba(63,218,193,0.09);
+}
+
+.journey-achievement-filters + .tasks-list .task-item-main > div[style*="display: flex"] {
+  gap: 9px !important;
+  margin-top: 14px !important;
+}
+
+.journey-achievement-filters + .tasks-list .task-item-main > div[style*="display: flex"] a {
+  min-height: 38px;
+  padding: 0 15px !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 700;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.journey-achievement-filters + .tasks-list .task-item-main > div[style*="display: flex"] a:hover {
+  transform: translateY(-2px);
+}
+
+.journey-achievement-filters + .tasks-list .task-item-main > div[style*="display: flex"] a:first-child {
+  color: #ffffff;
+  background: linear-gradient(135deg, #605cf8, #785cff);
+  border: 1px solid rgba(150,142,255,0.28);
+  box-shadow: 0 8px 22px rgba(91,85,255,0.20);
+}
+
+.journey-achievement-filters + .tasks-list .task-item-main > div[style*="display: flex"] a:first-child:hover {
+  box-shadow: 0 12px 28px rgba(91,85,255,0.30);
+}
+
+.journey-achievement-filters + .tasks-list .task-item-main > div[style*="display: flex"] a:nth-child(2) {
+  color: #a9afc0;
+  background: rgba(255,255,255,0.025);
+  border: 1px solid rgba(255,255,255,0.08);
+}
+
+.journey-achievement-filters + .tasks-list .task-item-main > div[style*="display: flex"] a:nth-child(2):hover {
+  color: #ffffff;
+  border-color: rgba(255,255,255,0.15);
+  background: rgba(255,255,255,0.05);
+}
+
+.journey-achievement-filters + .tasks-list .task-item-actions {
+  position: relative;
+  z-index: 2;
+  align-self: flex-start;
+  display: flex;
+  gap: 7px;
+  margin-left: auto;
+}
+
+.journey-achievement-filters + .tasks-list .task-item-actions button {
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 11px;
+  color: #7b8192;
+  background: rgba(255,255,255,0.018);
+  border: 1px solid rgba(255,255,255,0.065);
+  cursor: pointer;
+  transition: 0.18s ease;
+}
+
+.journey-achievement-filters + .tasks-list .task-item-actions button:hover {
+  color: #ffffff;
+  background: rgba(105,96,255,0.10);
+  border-color: rgba(111,103,255,0.24);
+  transform: translateY(-2px);
+}
+
+.journey-achievement-filters + .tasks-list .task-item-actions button:last-child:hover {
+  color: #ff8c9d;
+  background: rgba(255,91,120,0.07);
+  border-color: rgba(255,91,120,0.20);
+}
+
+/* Better achievement form */
+.journey-page .task-form-card:has(input[placeholder="Paste Google Drive sharing link"]) {
+  border-color: rgba(105,95,255,0.18);
+  background: linear-gradient(145deg, rgba(20,22,34,0.98), rgba(11,13,21,0.98));
+  box-shadow: 0 20px 55px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.025);
+}
+
+.journey-page .task-form-card:has(input[placeholder="Paste Google Drive sharing link"]) input[type="url"] {
+  border-color: rgba(105,95,255,0.16);
+  background: rgba(8,10,17,0.72);
+}
+
+.journey-page .task-form-card:has(input[placeholder="Paste Google Drive sharing link"]) input[type="url"]:focus {
+  border-color: rgba(111,101,255,0.48);
+  box-shadow: 0 0 0 3px rgba(104,94,255,0.08);
+}
+
+@media (max-width: 700px) {
+  .journey-page .semester-section:has(.journey-achievement-filters) > .tasks-storage-note {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .journey-achievement-filters {
+    width: 100%;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    scrollbar-width: none;
+  }
+
+  .journey-achievement-filters::-webkit-scrollbar {
+    display: none;
+  }
+
+  .journey-filter-button {
+    flex: 0 0 auto;
+  }
+
+  .journey-achievement-filters + .tasks-list .task-item {
+    padding: 17px;
+  }
+
+  .journey-achievement-filters + .tasks-list .task-check-button {
+    width: 42px;
+    height: 42px;
+  }
+
+  .journey-achievement-filters + .tasks-list .task-item-top h3 {
+    font-size: 14px;
+  }
+
+  .journey-achievement-filters + .tasks-list .task-item-actions {
+    width: 100%;
+    margin-left: 64px;
+  }
+}

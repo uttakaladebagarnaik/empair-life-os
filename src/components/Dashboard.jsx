@@ -10,8 +10,9 @@ const getToday = () => {
 };
 
 const TASKS_API_URL = "http://localhost:5000/api/tasks";
-const ATTENDANCE_API_URL = "http://localhost:5000/api/attendance";
-const ROUTINE_API_URL = "http://localhost:5000/api/routine";
+const JOURNEY_API_URL = "http://localhost:5000/api/journey";
+const JOURNEY_NOTES_API_URL = "http://localhost:5000/api/journey-notes";
+const FINANCE_API_URL = "http://localhost:5000/api/finance";
 
 const getCurrentUserId = (userId = "") => {
   const storedUserId = userId || localStorage.getItem("empair_user_id") || "";
@@ -49,40 +50,9 @@ const normalizeTask = (task) => ({
   completed: Boolean(task.is_completed ?? task.completed),
 });
 
-const parseDate = (dateValue) => {
-  // PostgreSQL DATE values can arrive through node-postgres as a
-  // JavaScript Date object. Read Date objects in UTC so India's timezone does not shift the calendar date backward.
-  if (dateValue instanceof Date) {
-    return new Date(
-      dateValue.getUTCFullYear(),
-      dateValue.getUTCMonth(),
-      dateValue.getUTCDate()
-    );
-  }
-
-  const dateString = String(dateValue).slice(0, 10);
+const parseDate = (dateString) => {
   const [year, month, day] = dateString.split("-").map(Number);
   return new Date(year, month - 1, day);
-};
-
-const normalizeDatabaseDate = (dateValue) => {
-  if (!dateValue) return "";
-
-  // A PostgreSQL DATE is a calendar date, not a point in time.
-  // Never use local timezone conversion for it.
-  if (typeof dateValue === "string") {
-    const match = dateValue.match(/^(\d{4}-\d{2}-\d{2})/);
-    return match ? match[1] : "";
-  }
-
-  if (dateValue instanceof Date) {
-    const year = dateValue.getUTCFullYear();
-    const month = String(dateValue.getUTCMonth() + 1).padStart(2, "0");
-    const day = String(dateValue.getUTCDate()).padStart(2, "0");
-    return `${year}-${month}-${day}`;
-  }
-
-  return String(dateValue).slice(0, 10);
 };
 
 const formatDate = (date) => {
@@ -127,6 +97,53 @@ const getShortDate = (dateString) => {
   });
 };
 
+const getGoogleDriveFileId = (value = "") => {
+  if (!value) return "";
+
+  try {
+    const url = new URL(value);
+
+    if (!url.hostname.includes("drive.google.com")) {
+      return "";
+    }
+
+    const queryId = url.searchParams.get("id");
+    if (queryId) return queryId;
+
+    const pathMatch = url.pathname.match(/\/file\/d\/([^/]+)/i);
+    if (pathMatch?.[1]) return pathMatch[1];
+
+    const documentMatch = url.pathname.match(/\/document\/d\/([^/]+)/i);
+    if (documentMatch?.[1]) return documentMatch[1];
+
+    const foldersMatch = url.pathname.match(/\/folders\/([^/]+)/i);
+    if (foldersMatch?.[1]) return foldersMatch[1];
+  } catch (error) {
+    return "";
+  }
+
+  return "";
+};
+
+const getGoogleDriveDownloadUrl = (value = "") => {
+  const fileId = getGoogleDriveFileId(value);
+  return fileId
+    ? `https://drive.google.com/uc?export=download&id=${encodeURIComponent(fileId)}`
+    : "";
+};
+
+const isGoogleDriveLink = (value = "") => {
+  try {
+    const url = new URL(value);
+    return (
+      url.hostname === "drive.google.com" ||
+      url.hostname.endsWith(".drive.google.com")
+    );
+  } catch (error) {
+    return false;
+  }
+};
+
 function Dashboard({
   name = "Uttakaladeba",
   userId = "",
@@ -141,192 +158,99 @@ function Dashboard({
   // DAILY ROUTINE / ATTENDANCE DATA
   // =====================================================
 
-  const [dailyRoutine, setDailyRoutine] = useState({});
-  const [routineLoading, setRoutineLoading] = useState(false);
-  const [routineError, setRoutineError] = useState("");
-  const [attendanceError, setAttendanceError] = useState("");
-
-  // Always start the routine calendar on the real current day.
-  // Do not restore an old selected date from localStorage because that
-  // can make the routine appear one day behind after a refresh.
-  const [selectedDate, setSelectedDate] = useState(() => getToday());
-
-  const [showAddSubject, setShowAddSubject] = useState(false);
-  const [newSubjectName, setNewSubjectName] = useState("");
-  const [newSubjectCode, setNewSubjectCode] = useState("");
-
-  const [editingRoutine, setEditingRoutine] = useState(null);
-  const [editRoutineName, setEditRoutineName] = useState("");
-  const [editRoutineDate, setEditRoutineDate] = useState("");
-  const [editRoutineStartTime, setEditRoutineStartTime] = useState("");
-  const [editRoutineEndTime, setEditRoutineEndTime] = useState("");
-
-  const buildRoutineMap = (routines, attendance) => {
-    const grouped = {};
-    const attendanceByKey = new Map();
-
-    (attendance || []).forEach((record) => {
-      const date = normalizeDatabaseDate(record.attendance_date);
-      const key = `${date}::${String(record.subject).trim().toLowerCase()}`;
-
-      attendanceByKey.set(key, {
-        id: String(record.id),
-        status: record.status,
-        subject: record.subject,
-      });
-    });
-
-    (routines || []).forEach((record) => {
-      const date = normalizeDatabaseDate(record.routine_date);
-      const key = `${date}::${String(record.title).trim().toLowerCase()}`;
-      const attendanceRecord = attendanceByKey.get(key);
-
-      if (!grouped[date]) {
-        grouped[date] = [];
-      }
-
-      grouped[date].push({
-        id: String(record.id),
-        attendanceId: attendanceRecord
-          ? String(attendanceRecord.id)
-          : null,
-        name: record.title,
-        code: record.title
-          .substring(0, 4)
-          .toUpperCase(),
-        status: attendanceRecord
-          ? attendanceRecord.status
-          : "pending",
-        startTime: record.start_time || null,
-        endTime: record.end_time || null,
-      });
-
-      if (attendanceRecord) {
-        attendanceByKey.delete(key);
-      }
-    });
-
-    // Keep older attendance records that may have been created
-    // before Daily Routine was moved to the routine table.
-    attendanceByKey.forEach((record) => {
-      const attendanceDate = normalizeDatabaseDate(
-        (attendance || []).find(
-          (item) => String(item.id) === String(record.id)
-        )?.attendance_date
-      );
-
-      if (!attendanceDate) {
-        return;
-      }
-
-      if (!grouped[attendanceDate]) {
-        grouped[attendanceDate] = [];
-      }
-
-      grouped[attendanceDate].push({
-        id: `attendance-${record.id}`,
-        attendanceId: String(record.id),
-        name: record.subject,
-        code: record.subject
-          .substring(0, 4)
-          .toUpperCase(),
-        status: record.status,
-        startTime: null,
-        endTime: null,
-      });
-    });
-
-    return grouped;
-  };
-
-  const loadRoutine = async () => {
+  const [dailyRoutine, setDailyRoutine] = useState(() => {
     try {
-      setRoutineLoading(true);
-      setRoutineError("");
-
-      const authToken = getAuthToken(token);
-
-      if (!authToken) {
-        setDailyRoutine({});
-        setRoutineError(
-          "Authentication token not found. Please login again."
-        );
-        return;
+      const savedRoutine = localStorage.getItem("empair_daily_routine");
+      if (savedRoutine) {
+        return JSON.parse(savedRoutine);
       }
-
-      const [routineResponse, attendanceResponse] =
-        await Promise.all([
-          fetch(ROUTINE_API_URL, {
-            method: "GET",
-            headers: {
-              Authorization: `Bearer ${authToken}`,
-            },
-          }),
-          fetch(ATTENDANCE_API_URL, {
-            method: "GET",
-            headers: {
-              Authorization: `Bearer ${authToken}`,
-            },
-          }),
-        ]);
-
-      const routineData = await routineResponse.json();
-      const attendanceData = await attendanceResponse.json();
-
-      if (!routineResponse.ok) {
-        throw new Error(
-          routineData.message || "Failed to load routine"
-        );
-      }
-
-      if (!attendanceResponse.ok) {
-        throw new Error(
-          attendanceData.message || "Failed to load attendance"
-        );
-      }
-
-      setDailyRoutine(
-        buildRoutineMap(
-          routineData.routines || [],
-          attendanceData.attendance || []
-        )
-      );
     } catch (error) {
-      console.error(
-        "Failed to load EMPAIR routine:",
-        error
-      );
-
-      setRoutineError(
-        error.message ||
-        "Unable to connect to EMPAIR routine backend."
-      );
-    } finally {
-      setRoutineLoading(false);
+      console.error("Failed to load EMPAIR routine:", error);
     }
-  };
+
+    return {
+    "2026-09-25": [
+      {
+        id: 1,
+        name: "Universal Human Values",
+        code: "UHV",
+        status: "pending",
+      },
+      {
+        id: 2,
+        name: "Engineering Chemistry",
+        code: "CHEM",
+        status: "pending",
+      },
+      {
+        id: 3,
+        name: "Engineering Mathematics",
+        code: "MATH",
+        status: "pending",
+      },
+      {
+        id: 4,
+        name: "Programming in C",
+        code: "PC",
+        status: "pending",
+      },
+    ],
+
+    "2026-09-26": [
+      {
+        id: 5,
+        name: "Basic Mechanical Engineering",
+        code: "BME",
+        status: "pending",
+      },
+      {
+        id: 6,
+        name: "Basic Electrical Engineering",
+        code: "BE",
+        status: "pending",
+      },
+    ],
+    };
+  });
 
   useEffect(() => {
-    loadRoutine();
-  }, [token, userId]);
+    try {
+      localStorage.setItem(
+        "empair_daily_routine",
+        JSON.stringify(dailyRoutine)
+      );
+    } catch (error) {
+      console.error("Failed to save EMPAIR routine:", error);
+    }
+  }, [dailyRoutine]);
 
-  // Keep the selected date in memory only.
-  // The routine date itself comes from PostgreSQL and is never shifted
-  // through JavaScript Date/timezone conversion.
+  const [selectedDate, setSelectedDate] =
+    useState(() => localStorage.getItem("empair_selected_date") || getToday());
 
   const visibleDates = getDateRange(selectedDate, 7);
 
   const moveDateWindow = (direction) => {
     const current = parseDate(selectedDate);
-    current.setDate(
-      current.getDate() + direction * 7
-    );
+    current.setDate(current.getDate() + direction * 7);
     setSelectedDate(formatDate(current));
   };
 
   const goToToday = () => {
     setSelectedDate(getToday());
   };
+
+  useEffect(() => {
+    localStorage.setItem("empair_selected_date", selectedDate);
+  }, [selectedDate]);
+
+  const [showAddSubject, setShowAddSubject] =
+    useState(false);
+
+  const [newSubjectName, setNewSubjectName] =
+    useState("");
+
+  const [newSubjectCode, setNewSubjectCode] =
+    useState("");
 
   // =====================================================
   // TASKS
@@ -573,6 +497,1253 @@ function Dashboard({
   };
 
   // =====================================================
+  // MY JOURNEY
+  // =====================================================
+
+  const [journeyProfile, setJourneyProfile] = useState(null);
+  const [journeyItems, setJourneyItems] = useState([]);
+  const [journeyLoading, setJourneyLoading] = useState(false);
+  const [journeyError, setJourneyError] = useState("");
+  const [showJourneyProfileForm, setShowJourneyProfileForm] = useState(false);
+  const [journeyItemFormOpen, setJourneyItemFormOpen] = useState(false);
+  const [editingJourneyItemId, setEditingJourneyItemId] = useState(null);
+  const [journeyAchievementFilter, setJourneyAchievementFilter] = useState("all");
+
+  const [journeyCollege, setJourneyCollege] = useState("");
+  const [journeyDegree, setJourneyDegree] = useState("");
+  const [journeyBranch, setJourneyBranch] = useState("");
+  const [journeyYear, setJourneyYear] = useState("1");
+  const [journeySemester, setJourneySemester] = useState("1");
+  const [journeyStartYear, setJourneyStartYear] = useState("");
+  const [journeyGraduationYear, setJourneyGraduationYear] = useState("");
+
+  const [journeyItemType, setJourneyItemType] = useState("project");
+  const [journeyItemTitle, setJourneyItemTitle] = useState("");
+  const [journeyItemDescription, setJourneyItemDescription] = useState("");
+  const [journeyItemDate, setJourneyItemDate] = useState("");
+  const [journeyItemLink, setJourneyItemLink] = useState("");
+
+  // =====================================================
+  // SEMESTER NOTES
+  // =====================================================
+
+  const [journeyNotes, setJourneyNotes] = useState([]);
+  const [journeyNotesLoading, setJourneyNotesLoading] = useState(false);
+  const [journeyNotesError, setJourneyNotesError] = useState("");
+  const [showSemesterNotes, setShowSemesterNotes] = useState(false);
+  const [showSemesterProgress, setShowSemesterProgress] = useState(false);
+  const [showNoteForm, setShowNoteForm] = useState(false);
+  const [editingNoteId, setEditingNoteId] = useState(null);
+  const [noteTitle, setNoteTitle] = useState("");
+  const [noteContent, setNoteContent] = useState("");
+  const [noteDate, setNoteDate] = useState(getToday());
+  const [noteFile, setNoteFile] = useState(null);
+  const [noteFileInputKey, setNoteFileInputKey] = useState(0);
+  const [viewingNote, setViewingNote] = useState(null);
+  const [noteViewerUrl, setNoteViewerUrl] = useState("");
+  const [noteViewerLoading, setNoteViewerLoading] = useState(false);
+  const [noteViewerError, setNoteViewerError] = useState("");
+
+  // =====================================================
+  // FINANCE
+  // =====================================================
+
+  const [financeTransactions, setFinanceTransactions] = useState([]);
+  const [financeLoading, setFinanceLoading] = useState(false);
+  const [financeError, setFinanceError] = useState("");
+  const [showFinanceForm, setShowFinanceForm] = useState(false);
+  const [editingFinanceId, setEditingFinanceId] = useState(null);
+  const [financeType, setFinanceType] = useState("expense");
+  const [financeAmount, setFinanceAmount] = useState("");
+  const [financeCategory, setFinanceCategory] = useState("");
+  const [financeDescription, setFinanceDescription] = useState("");
+  const [financeDate, setFinanceDate] = useState(getToday());
+  const [financeOpeningBalance, setFinanceOpeningBalance] = useState(0);
+  const [financeStatementMode, setFinanceStatementMode] = useState("full");
+
+  const [financeBalanceLoading, setFinanceBalanceLoading] = useState(false);
+  const [financeBalanceSaving, setFinanceBalanceSaving] = useState(false);
+  const [financeBalanceMessage, setFinanceBalanceMessage] = useState("");
+
+  const loadFinanceBalance = async () => {
+    try {
+      setFinanceBalanceLoading(true);
+      setFinanceBalanceMessage("");
+
+      const authToken = getAuthToken(token);
+
+      if (!authToken) {
+        setFinanceOpeningBalance(0);
+        return;
+      }
+
+      const response = await fetch(`${FINANCE_API_URL}/balance`, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to load opening balance");
+      }
+
+      const openingBalance = Number(data.opening_balance || 0);
+
+      setFinanceOpeningBalance(
+        Number.isFinite(openingBalance) ? openingBalance : 0
+      );
+    } catch (error) {
+      console.error("Failed to load finance opening balance:", error);
+      setFinanceBalanceMessage(
+        error.message || "Unable to load opening balance."
+      );
+    } finally {
+      setFinanceBalanceLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadFinanceBalance();
+  }, [token, userId]);
+
+  const saveFinanceOpeningBalance = async () => {
+    try {
+      setFinanceBalanceSaving(true);
+      setFinanceBalanceMessage("");
+      setFinanceError("");
+
+      const authToken = getAuthToken(token);
+
+      if (!authToken) {
+        throw new Error("Authentication token not found. Please login again.");
+      }
+
+      const openingBalance = Number(financeOpeningBalance || 0);
+
+      if (!Number.isFinite(openingBalance) || openingBalance < 0) {
+        throw new Error("Opening balance must be 0 or greater.");
+      }
+
+      const response = await fetch(`${FINANCE_API_URL}/balance`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          opening_balance: openingBalance,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to save opening balance");
+      }
+
+      const savedBalance = Number(data.opening_balance || 0);
+
+      setFinanceOpeningBalance(
+        Number.isFinite(savedBalance) ? savedBalance : openingBalance
+      );
+      setFinanceBalanceMessage("Opening balance saved to PostgreSQL.");
+    } catch (error) {
+      console.error("Failed to save finance opening balance:", error);
+      setFinanceBalanceMessage(
+        error.message || "Unable to save opening balance."
+      );
+    } finally {
+      setFinanceBalanceSaving(false);
+    }
+  };
+
+  const loadFinance = async () => {
+    try {
+      setFinanceLoading(true);
+      setFinanceError("");
+
+      const authToken = getAuthToken(token);
+
+      if (!authToken) {
+        setFinanceTransactions([]);
+        setFinanceError("Authentication token not found. Please login again.");
+        return;
+      }
+
+      const response = await fetch(FINANCE_API_URL, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to load finance transactions");
+      }
+
+      setFinanceTransactions(data.transactions || []);
+    } catch (error) {
+      console.error("Failed to load EMPAIR finance:", error);
+      setFinanceError(error.message || "Unable to load finance data.");
+    } finally {
+      setFinanceLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadFinance();
+  }, [token, userId]);
+
+  const resetFinanceForm = () => {
+    setEditingFinanceId(null);
+    setFinanceType("expense");
+    setFinanceAmount("");
+    setFinanceCategory("");
+    setFinanceDescription("");
+    setFinanceDate(getToday());
+    setShowFinanceForm(false);
+  };
+
+  const openFinanceForm = (transaction = null, defaultType = "expense") => {
+    if (transaction) {
+      setEditingFinanceId(transaction.id);
+      setFinanceType(transaction.type || "expense");
+      setFinanceAmount(String(transaction.amount ?? ""));
+      setFinanceCategory(transaction.category || "");
+      setFinanceDescription(transaction.description || "");
+      setFinanceDate(transaction.transaction_date || getToday());
+    } else {
+      setEditingFinanceId(null);
+      setFinanceType(defaultType);
+      setFinanceAmount("");
+      setFinanceCategory("");
+      setFinanceDescription("");
+      setFinanceDate(getToday());
+    }
+
+    setActivePage("Finance");
+    setShowFinanceForm(true);
+  };
+
+  const saveFinanceTransaction = async (e) => {
+    e.preventDefault();
+
+    if (!financeAmount || Number(financeAmount) <= 0 || !financeCategory.trim()) {
+      setFinanceError("Enter a valid amount and category.");
+      return;
+    }
+
+    try {
+      setFinanceError("");
+
+      const authToken = getAuthToken(token);
+
+      if (!authToken) {
+        throw new Error("Authentication token not found. Please login again.");
+      }
+
+      const payload = {
+        type: financeType,
+        amount: Number(financeAmount),
+        category: financeCategory.trim(),
+        description: financeDescription.trim() || null,
+        transaction_date: financeDate || getToday(),
+      };
+
+      const url = editingFinanceId
+        ? `${FINANCE_API_URL}/${editingFinanceId}`
+        : FINANCE_API_URL;
+
+      const response = await fetch(url, {
+        method: editingFinanceId ? "PUT" : "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to save finance transaction");
+      }
+
+      if (editingFinanceId) {
+        setFinanceTransactions((previous) =>
+          previous.map((transaction) =>
+            String(transaction.id) === String(editingFinanceId)
+              ? data.transaction
+              : transaction
+          )
+        );
+      } else {
+        setFinanceTransactions((previous) => [
+          data.transaction,
+          ...previous,
+        ]);
+      }
+
+      resetFinanceForm();
+    } catch (error) {
+      console.error("Failed to save finance transaction:", error);
+      setFinanceError(
+        error.message || "Unable to save finance transaction."
+      );
+    }
+  };
+
+  const deleteFinanceTransaction = async (transactionId) => {
+    try {
+      setFinanceError("");
+
+      const authToken = getAuthToken(token);
+
+      if (!authToken) {
+        throw new Error("Authentication token not found. Please login again.");
+      }
+
+      const response = await fetch(
+        `${FINANCE_API_URL}/${transactionId}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+          },
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.message || "Failed to delete finance transaction"
+        );
+      }
+
+      setFinanceTransactions((previous) =>
+        previous.filter(
+          (transaction) =>
+            String(transaction.id) !== String(transactionId)
+        )
+      );
+    } catch (error) {
+      console.error("Failed to delete finance transaction:", error);
+      setFinanceError(
+        error.message || "Unable to delete finance transaction."
+      );
+    }
+  };
+
+  const financeTotalIncome = financeTransactions.reduce(
+    (total, transaction) =>
+      transaction.type === "income"
+        ? total + Number(transaction.amount || 0)
+        : total,
+    0
+  );
+
+  const financeTotalExpense = financeTransactions.reduce(
+    (total, transaction) =>
+      transaction.type === "expense"
+        ? total + Number(transaction.amount || 0)
+        : total,
+    0
+  );
+
+  const financeBalance = financeTotalIncome - financeTotalExpense;
+
+  const financeThisMonthExpense = financeTransactions.reduce(
+    (total, transaction) => {
+      if (
+        transaction.type !== "expense" ||
+        !transaction.transaction_date
+      ) {
+        return total;
+      }
+
+      const transactionDate = String(transaction.transaction_date);
+      const today = getToday();
+
+      if (transactionDate.substring(0, 7) !== today.substring(0, 7)) {
+        return total;
+      }
+
+      return total + Number(transaction.amount || 0);
+    },
+    0
+  );
+
+  const financeSortedTransactions = [...financeTransactions].sort(
+    (a, b) => {
+      const dateA = String(a.transaction_date || "").substring(0, 10);
+      const dateB = String(b.transaction_date || "").substring(0, 10);
+
+      if (dateA !== dateB) {
+        return dateA.localeCompare(dateB);
+      }
+
+      const createdA = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const createdB = b.created_at ? new Date(b.created_at).getTime() : 0;
+
+      if (createdA !== createdB) {
+        return createdA - createdB;
+      }
+
+      return Number(a.id || 0) - Number(b.id || 0);
+    }
+  );
+
+  let runningBalance = Number(financeOpeningBalance || 0);
+
+  const financeStatementTransactions = financeSortedTransactions.map(
+    (transaction) => {
+      const amount = Number(transaction.amount || 0);
+
+      if (transaction.type === "income") {
+        runningBalance += amount;
+      } else {
+        runningBalance -= amount;
+      }
+
+      return {
+        ...transaction,
+        running_balance: runningBalance,
+      };
+    }
+  );
+
+  const financeCurrentBalance = runningBalance;
+
+  const financeDailyMap = financeStatementTransactions.reduce(
+    (groups, transaction) => {
+      const dateKey = String(
+        transaction.transaction_date || getToday()
+      ).substring(0, 10);
+
+      if (!groups[dateKey]) {
+        groups[dateKey] = {
+          date: dateKey,
+          income: 0,
+          expense: 0,
+          transactions: [],
+          closingBalance: Number(financeOpeningBalance || 0),
+        };
+      }
+
+      const amount = Number(transaction.amount || 0);
+
+      if (transaction.type === "income") {
+        groups[dateKey].income += amount;
+      } else {
+        groups[dateKey].expense += amount;
+      }
+
+      groups[dateKey].closingBalance = Number(
+        transaction.running_balance || 0
+      );
+
+      groups[dateKey].transactions.push(transaction);
+
+      return groups;
+    },
+    {}
+  );
+
+  const financeDailyGroups = Object.values(financeDailyMap).sort(
+    (a, b) => b.date.localeCompare(a.date)
+  );
+
+  const financeTotalDays = financeDailyGroups.length;
+
+  const financeIncomeStatement = financeStatementTransactions.filter(
+    (transaction) => transaction.type === "income"
+  );
+
+  const financeTransactionStatement = financeStatementTransactions;
+
+  const financeFullHistory = financeStatementTransactions;
+
+  const getFinanceStatementRows = () => {
+    if (financeStatementMode === "income") {
+      return financeIncomeStatement;
+    }
+
+    return financeStatementMode === "transactions"
+      ? financeTransactionStatement
+      : financeFullHistory;
+  };
+
+  const downloadFinanceStatement = () => {
+    const rows = getFinanceStatementRows();
+
+    if (rows.length === 0) {
+      setFinanceError("There are no transactions to export.");
+      return;
+    }
+
+    const modeLabel =
+      financeStatementMode === "income"
+        ? "Income Report"
+        : financeStatementMode === "transactions"
+          ? "Transaction Statement"
+          : "Full Finance History";
+
+    const csvRows = [
+      ["EMPAIR FINANCE STATEMENT"],
+      ["Report", modeLabel],
+      ["Opening Balance", Number(financeOpeningBalance || 0).toFixed(2)],
+      ["Current Balance", Number(financeCurrentBalance || 0).toFixed(2)],
+      [],
+      [
+        "Date",
+        "Type",
+        "Category",
+        "Description",
+        "Credit",
+        "Debit",
+        "Running Balance",
+      ],
+      ...rows.map((transaction) => [
+        String(transaction.transaction_date || "").substring(0, 10),
+        transaction.type,
+        transaction.category || "",
+        transaction.description || "",
+        transaction.type === "income"
+          ? Number(transaction.amount || 0).toFixed(2)
+          : "0.00",
+        transaction.type === "expense"
+          ? Number(transaction.amount || 0).toFixed(2)
+          : "0.00",
+        Number(transaction.running_balance || 0).toFixed(2),
+      ]),
+    ];
+
+    const csv = csvRows
+      .map((row) =>
+        row
+          .map((value) => {
+            const stringValue = String(value ?? "");
+            return `"${stringValue.replace(/"/g, '""')}"`;
+          })
+          .join(",")
+      )
+      .join("\n");
+
+    const blob = new Blob([csv], {
+      type: "text/csv;charset=utf-8;",
+    });
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+
+    link.href = url;
+    link.download = `empair-${financeStatementMode}-statement-${getToday()}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const printFinanceStatement = () => {
+    const rows = getFinanceStatementRows();
+
+    if (rows.length === 0) {
+      setFinanceError("There are no transactions to print.");
+      return;
+    }
+
+    const modeLabel =
+      financeStatementMode === "income"
+        ? "Income Report"
+        : financeStatementMode === "transactions"
+          ? "Transaction Statement"
+          : "Full Finance History";
+
+    const statementRows = rows
+      .map(
+        (transaction) => `
+          <tr>
+            <td>${String(transaction.transaction_date || "").substring(0, 10)}</td>
+            <td>${transaction.type === "income" ? "Credit" : "Debit"}</td>
+            <td>${transaction.category || ""}</td>
+            <td>${transaction.description || ""}</td>
+            <td class="credit">${
+              transaction.type === "income"
+                ? `+₹${formatFinanceAmount(transaction.amount)}`
+                : "-"
+            }</td>
+            <td class="debit">${
+              transaction.type === "expense"
+                ? `-₹${formatFinanceAmount(transaction.amount)}`
+                : "-"
+            }</td>
+            <td>₹${formatFinanceAmount(transaction.running_balance)}</td>
+          </tr>
+        `
+      )
+      .join("");
+
+    const printWindow = window.open("", "_blank");
+
+    if (!printWindow) {
+      setFinanceError("Please allow pop-ups to print the statement.");
+      return;
+    }
+
+    printWindow.document.write(`
+      <!doctype html>
+      <html>
+        <head>
+          <title>EMPAIR - ${modeLabel}</title>
+          <style>
+            body {
+              font-family: Arial, sans-serif;
+              padding: 32px;
+              color: #111827;
+            }
+            h1 { margin-bottom: 4px; }
+            p { color: #6b7280; }
+            .summary {
+              display: flex;
+              gap: 28px;
+              margin: 24px 0;
+              padding: 18px;
+              border: 1px solid #e5e7eb;
+              border-radius: 10px;
+            }
+            .summary strong { display: block; margin-bottom: 5px; }
+            table {
+              width: 100%;
+              border-collapse: collapse;
+              margin-top: 20px;
+            }
+            th, td {
+              border-bottom: 1px solid #e5e7eb;
+              padding: 10px 8px;
+              text-align: left;
+              font-size: 13px;
+            }
+            th { background: #f3f4f6; }
+            .credit { color: #16a34a; font-weight: 700; }
+            .debit { color: #dc2626; font-weight: 700; }
+          </style>
+        </head>
+        <body>
+          <h1>EMPAIR</h1>
+          <p>${modeLabel} · Generated ${formatFinanceDate(getToday())}</p>
+
+          <div class="summary">
+            <div>
+              <strong>Opening Balance</strong>
+              ₹${formatFinanceAmount(financeOpeningBalance)}
+            </div>
+            <div>
+              <strong>Total Income</strong>
+              <span class="credit">+₹${formatFinanceAmount(financeTotalIncome)}</span>
+            </div>
+            <div>
+              <strong>Total Expense</strong>
+              <span class="debit">-₹${formatFinanceAmount(financeTotalExpense)}</span>
+            </div>
+            <div>
+              <strong>Current Balance</strong>
+              ₹${formatFinanceAmount(financeCurrentBalance)}
+            </div>
+          </div>
+
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Type</th>
+                <th>Category</th>
+                <th>Description</th>
+                <th>Credit</th>
+                <th>Debit</th>
+                <th>Balance</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${statementRows}
+            </tbody>
+          </table>
+        </body>
+      </html>
+    `);
+
+    printWindow.document.close();
+    printWindow.focus();
+    printWindow.print();
+  };
+
+  const formatFinanceAmount = (amount) =>
+    Number(amount || 0).toLocaleString("en-IN", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+
+  const formatFinanceDate = (dateString) => {
+    if (!dateString) return "No date";
+
+    return parseDate(String(dateString).substring(0, 10)).toLocaleDateString(
+      "en-IN",
+      {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      }
+    );
+  };
+
+  const loadJourney = async () => {
+    try {
+      setJourneyLoading(true);
+      setJourneyError("");
+
+      const authToken = getAuthToken(token);
+
+      if (!authToken) {
+        setJourneyProfile(null);
+        setJourneyItems([]);
+        setJourneyError("Authentication token not found. Please login again.");
+        return;
+      }
+
+      const headers = {
+        Authorization: `Bearer ${authToken}`,
+      };
+
+      const [profileResponse, itemsResponse] = await Promise.all([
+        fetch(`${JOURNEY_API_URL}/profile`, { headers }),
+        fetch(`${JOURNEY_API_URL}/items`, { headers }),
+      ]);
+
+      const profileData = await profileResponse.json();
+      const itemsData = await itemsResponse.json();
+
+      if (!profileResponse.ok) {
+        throw new Error(profileData.message || "Failed to load journey profile");
+      }
+
+      if (!itemsResponse.ok) {
+        throw new Error(itemsData.message || "Failed to load journey items");
+      }
+
+      setJourneyProfile(profileData.profile || null);
+      setJourneyItems(itemsData.items || []);
+
+      if (profileData.profile) {
+        const profile = profileData.profile;
+        setJourneyCollege(profile.college || "");
+        setJourneyDegree(profile.degree || "");
+        setJourneyBranch(profile.branch || "");
+        setJourneyYear(String(profile.current_year || 1));
+        setJourneySemester(String(profile.current_semester || 1));
+        setJourneyStartYear(profile.start_year ? String(profile.start_year) : "");
+        setJourneyGraduationYear(
+          profile.graduation_year ? String(profile.graduation_year) : ""
+        );
+      }
+    } catch (error) {
+      console.error("Failed to load EMPAIR journey:", error);
+      setJourneyError(error.message || "Unable to load My Journey.");
+    } finally {
+      setJourneyLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadJourney();
+  }, [token, userId]);
+
+  const openJourneyProfileForm = () => {
+    if (journeyProfile) {
+      setJourneyCollege(journeyProfile.college || "");
+      setJourneyDegree(journeyProfile.degree || "");
+      setJourneyBranch(journeyProfile.branch || "");
+      setJourneyYear(String(journeyProfile.current_year || 1));
+      setJourneySemester(String(journeyProfile.current_semester || 1));
+      setJourneyStartYear(
+        journeyProfile.start_year ? String(journeyProfile.start_year) : ""
+      );
+      setJourneyGraduationYear(
+        journeyProfile.graduation_year
+          ? String(journeyProfile.graduation_year)
+          : ""
+      );
+    }
+    setShowJourneyProfileForm(true);
+  };
+
+  const saveJourneyProfile = async (e) => {
+    e.preventDefault();
+
+    try {
+      setJourneyError("");
+      const authToken = getAuthToken(token);
+
+      if (!authToken) {
+        throw new Error("Authentication token not found. Please login again.");
+      }
+
+      const response = await fetch(`${JOURNEY_API_URL}/profile`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          college: journeyCollege.trim() || null,
+          degree: journeyDegree.trim() || null,
+          branch: journeyBranch.trim() || null,
+          current_year: Number(journeyYear),
+          current_semester: Number(journeySemester),
+          start_year: journeyStartYear ? Number(journeyStartYear) : null,
+          graduation_year: journeyGraduationYear
+            ? Number(journeyGraduationYear)
+            : null,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to save journey profile");
+      }
+
+      setJourneyProfile(data.profile);
+      setShowJourneyProfileForm(false);
+    } catch (error) {
+      console.error("Failed to save journey profile:", error);
+      setJourneyError(error.message || "Unable to save journey profile.");
+    }
+  };
+
+  const resetJourneyItemForm = () => {
+    setJourneyItemType("project");
+    setJourneyItemTitle("");
+    setJourneyItemDescription("");
+    setJourneyItemDate("");
+    setJourneyItemLink("");
+    setEditingJourneyItemId(null);
+    setJourneyItemFormOpen(false);
+  };
+
+  const openJourneyItemForm = (item = null) => {
+    if (item) {
+      setEditingJourneyItemId(item.id);
+      setJourneyItemType(item.type || "project");
+      setJourneyItemTitle(item.title || "");
+      setJourneyItemDescription(item.description || "");
+      setJourneyItemDate(item.item_date || "");
+      setJourneyItemLink(item.link || "");
+    } else {
+      setEditingJourneyItemId(null);
+      setJourneyItemType("project");
+      setJourneyItemTitle("");
+      setJourneyItemDescription("");
+      setJourneyItemDate("");
+      setJourneyItemLink("");
+    }
+    setJourneyItemFormOpen(true);
+  };
+
+  const saveJourneyItem = async (e) => {
+    e.preventDefault();
+
+    if (!journeyItemTitle.trim()) return;
+
+    try {
+      setJourneyError("");
+      const authToken = getAuthToken(token);
+
+      if (!authToken) {
+        throw new Error("Authentication token not found. Please login again.");
+      }
+
+      const trimmedDriveLink = journeyItemLink.trim();
+
+      if (trimmedDriveLink && !isGoogleDriveLink(trimmedDriveLink)) {
+        throw new Error("Please use a valid Google Drive link for achievement files.");
+      }
+
+      const payload = {
+        type: journeyItemType,
+        title: journeyItemTitle.trim(),
+        description: journeyItemDescription.trim() || null,
+        item_date: journeyItemDate || null,
+        link: trimmedDriveLink || null,
+      };
+
+      const url = editingJourneyItemId
+        ? `${JOURNEY_API_URL}/items/${editingJourneyItemId}`
+        : `${JOURNEY_API_URL}/items`;
+
+      const response = await fetch(url, {
+        method: editingJourneyItemId ? "PUT" : "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to save journey item");
+      }
+
+      if (editingJourneyItemId) {
+        setJourneyItems((previous) =>
+          previous.map((item) =>
+            String(item.id) === String(editingJourneyItemId)
+              ? data.item
+              : item
+          )
+        );
+      } else {
+        setJourneyItems((previous) => [data.item, ...previous]);
+      }
+
+      resetJourneyItemForm();
+    } catch (error) {
+      console.error("Failed to save journey item:", error);
+      setJourneyError(error.message || "Unable to save journey item.");
+    }
+  };
+
+  const deleteJourneyItem = async (itemId) => {
+    try {
+      setJourneyError("");
+      const authToken = getAuthToken(token);
+
+      if (!authToken) {
+        throw new Error("Authentication token not found. Please login again.");
+      }
+
+      const response = await fetch(`${JOURNEY_API_URL}/items/${itemId}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to delete journey item");
+      }
+
+      setJourneyItems((previous) =>
+        previous.filter((item) => String(item.id) !== String(itemId))
+      );
+    } catch (error) {
+      console.error("Failed to delete journey item:", error);
+      setJourneyError(error.message || "Unable to delete journey item.");
+    }
+  };
+
+  // =====================================================
+  // CURRENT JOURNEY SEMESTER
+  // =====================================================
+
+  const currentJourneyYear = Number(
+    journeyProfile?.current_year || 1
+  );
+
+  const currentJourneySemester = Number(
+    journeyProfile?.current_semester || 1
+  );
+
+  const loadJourneyNotes = async () => {
+    try {
+      setJourneyNotesLoading(true);
+      setJourneyNotesError("");
+
+      const authToken = getAuthToken(token);
+
+      if (!authToken) {
+        setJourneyNotes([]);
+        setJourneyNotesError("Authentication token not found. Please login again.");
+        return;
+      }
+
+      const response = await fetch(
+        `${JOURNEY_NOTES_API_URL}/${currentJourneySemester}`,
+        {
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+          },
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to load semester notes");
+      }
+
+      setJourneyNotes(data.notes || []);
+    } catch (error) {
+      console.error("Failed to load journey notes:", error);
+      setJourneyNotesError(error.message || "Unable to load semester notes.");
+    } finally {
+      setJourneyNotesLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadJourneyNotes();
+  }, [token, userId, currentJourneySemester]);
+
+  const resetNoteForm = () => {
+    setEditingNoteId(null);
+    setNoteTitle("");
+    setNoteContent("");
+    setNoteDate(getToday());
+    setNoteFile(null);
+    setNoteFileInputKey((previous) => previous + 1);
+    setShowNoteForm(false);
+  };
+
+  const openNoteForm = (note = null) => {
+    if (note) {
+      setEditingNoteId(note.id);
+      setNoteTitle(note.title || "");
+      setNoteContent(note.content || "");
+      setNoteDate(note.note_date || getToday());
+      setNoteFile(null);
+      setNoteFileInputKey((previous) => previous + 1);
+    } else {
+      setEditingNoteId(null);
+      setNoteTitle("");
+      setNoteContent("");
+      setNoteDate(getToday());
+      setNoteFile(null);
+      setNoteFileInputKey((previous) => previous + 1);
+    }
+
+    setShowSemesterNotes(true);
+    setShowNoteForm(true);
+  };
+
+  const saveJourneyNote = async (e) => {
+    e.preventDefault();
+
+    if (!noteTitle.trim()) return;
+
+    try {
+      setJourneyNotesError("");
+      const authToken = getAuthToken(token);
+
+      if (!authToken) {
+        throw new Error("Authentication token not found. Please login again.");
+      }
+
+      if (noteFile) {
+        const allowedTypes = [
+          "image/png",
+          "image/jpeg",
+          "application/pdf",
+        ];
+
+        if (!allowedTypes.includes(noteFile.type)) {
+          throw new Error("Only PNG, JPG/JPEG and PDF files are supported.");
+        }
+
+        if (noteFile.size > 500 * 1024 * 1024) {
+          throw new Error("File size must be 500 MB or smaller.");
+        }
+      }
+
+      const formData = new FormData();
+      formData.append("semester", String(currentJourneySemester));
+      formData.append("title", noteTitle.trim());
+      formData.append("content", noteContent.trim());
+      formData.append("note_date", noteDate || "");
+
+      if (noteFile) {
+        formData.append("file", noteFile);
+      }
+
+      const url = editingNoteId
+        ? `${JOURNEY_NOTES_API_URL}/${editingNoteId}`
+        : JOURNEY_NOTES_API_URL;
+
+      const response = await fetch(url, {
+        method: editingNoteId ? "PUT" : "POST",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to save semester note");
+      }
+
+      if (editingNoteId) {
+        setJourneyNotes((previous) =>
+          previous.map((note) =>
+            String(note.id) === String(editingNoteId)
+              ? data.note
+              : note
+          )
+        );
+      } else {
+        setJourneyNotes((previous) => [data.note, ...previous]);
+      }
+
+      resetNoteForm();
+    } catch (error) {
+      console.error("Failed to save journey note:", error);
+      setJourneyNotesError(error.message || "Unable to save semester note.");
+    }
+  };
+
+  const viewJourneyNoteFile = async (note) => {
+    try {
+      setNoteViewerLoading(true);
+      setNoteViewerError("");
+      setViewingNote(note);
+
+      if (noteViewerUrl) {
+        URL.revokeObjectURL(noteViewerUrl);
+        setNoteViewerUrl("");
+      }
+
+      const authToken = getAuthToken(token);
+
+      if (!authToken) {
+        throw new Error("Authentication token not found. Please login again.");
+      }
+
+      const response = await fetch(
+        `${JOURNEY_NOTES_API_URL}/${note.id}/file`,
+        {
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+          },
+        }
+      );
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.message || "Unable to open note file.");
+      }
+
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      setNoteViewerUrl(objectUrl);
+    } catch (error) {
+      console.error("Failed to open journey note file:", error);
+      setNoteViewerError(error.message || "Unable to open note file.");
+    } finally {
+      setNoteViewerLoading(false);
+    }
+  };
+
+  const closeJourneyNoteViewer = () => {
+    if (noteViewerUrl) {
+      URL.revokeObjectURL(noteViewerUrl);
+    }
+
+    setNoteViewerUrl("");
+    setViewingNote(null);
+    setNoteViewerError("");
+  };
+
+  const deleteJourneyNote = async (noteId) => {
+    try {
+      setJourneyNotesError("");
+      const authToken = getAuthToken(token);
+
+      if (!authToken) {
+        throw new Error("Authentication token not found. Please login again.");
+      }
+
+      const response = await fetch(`${JOURNEY_NOTES_API_URL}/${noteId}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to delete semester note");
+      }
+
+      setJourneyNotes((previous) =>
+        previous.filter((note) => String(note.id) !== String(noteId))
+      );
+    } catch (error) {
+      console.error("Failed to delete journey note:", error);
+      setJourneyNotesError(error.message || "Unable to delete semester note.");
+    }
+  };
+
+  const journeyProjects = journeyItems.filter(
+    (item) => item.type === "project"
+  );
+
+  const journeyCertificates = journeyItems.filter(
+    (item) => item.type === "certificate"
+  );
+
+  const journeyHackathons = journeyItems.filter(
+    (item) => item.type === "hackathon"
+  );
+
+  const filteredJourneyItems = journeyAchievementFilter === "all"
+    ? journeyItems
+    : journeyItems.filter(
+        (item) => item.type === journeyAchievementFilter
+      );
+
+  const journeySemesterProgress = Math.min(
+    8,
+    Math.max(1, currentJourneySemester)
+  );
+
+  const journeyYearProgress = Math.min(
+    4,
+    Math.max(1, currentJourneyYear)
+  );
+
+  const journeyProgressPercent = Math.min(
+    100,
+    Math.max(0, (currentJourneySemester / 8) * 100)
+  );
+
+  const journeyCompletedSemesters = Math.max(
+    0,
+    currentJourneySemester - 1
+  );
+
+  const journeyRemainingSemesters = Math.max(
+    0,
+    8 - currentJourneySemester
+  );
+
+  const journeyYearsRemaining = journeyProfile?.graduation_year
+    ? Math.max(
+        0,
+        Number(journeyProfile.graduation_year) - new Date().getFullYear()
+      )
+    : null;
+
+  // =====================================================
   // MENU
   // =====================================================
 
@@ -632,479 +1803,81 @@ function Dashboard({
   };
 
   // =====================================================
-  // ADD SUBJECT / ROUTINE
+  // ADD SUBJECT
   // =====================================================
 
-  const addSubject = async (e) => {
+  const addSubject = (e) => {
     e.preventDefault();
 
     if (!newSubjectName.trim()) {
       return;
     }
 
-    try {
-      setRoutineError("");
-      setAttendanceError("");
+    const newSubject = {
+      id: Date.now(),
+      name: newSubjectName.trim(),
+      code:
+        newSubjectCode.trim() ||
+        newSubjectName
+          .trim()
+          .substring(0, 4)
+          .toUpperCase(),
+      status: "pending",
+    };
 
-      const authToken = getAuthToken(token);
+    setDailyRoutine((previous) => ({
+      ...previous,
 
-      if (!authToken) {
-        throw new Error(
-          "Authentication token not found. Please login again."
-        );
-      }
+      [selectedDate]: [
+        ...(previous[selectedDate] || []),
+        newSubject,
+      ],
+    }));
 
-      const routineResponse = await fetch(
-        ROUTINE_API_URL,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${authToken}`,
-          },
-          body: JSON.stringify({
-            routine_date: selectedDate,
-            title: newSubjectName.trim(),
-            start_time: null,
-            end_time: null,
-          }),
-        }
-      );
-
-      const routineData = await routineResponse.json();
-
-      if (!routineResponse.ok) {
-        throw new Error(
-          routineData.message || "Failed to create routine"
-        );
-      }
-
-      const routineRecord = routineData.routine;
-
-      try {
-        const attendanceResponse = await fetch(
-          ATTENDANCE_API_URL,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${authToken}`,
-            },
-            body: JSON.stringify({
-              subject: newSubjectName.trim(),
-              attendance_date: selectedDate,
-              status: "pending",
-            }),
-          }
-        );
-
-        const attendanceData =
-          await attendanceResponse.json();
-
-        if (!attendanceResponse.ok) {
-          throw new Error(
-            attendanceData.message ||
-            "Failed to create attendance"
-          );
-        }
-
-        const attendanceRecord =
-          attendanceData.attendance;
-
-        const newSubject = {
-          id: String(routineRecord.id),
-          attendanceId: String(attendanceRecord.id),
-          name: routineRecord.title,
-          code:
-            newSubjectCode.trim() ||
-            routineRecord.title
-              .substring(0, 4)
-              .toUpperCase(),
-          status: attendanceRecord.status,
-          startTime: routineRecord.start_time || null,
-          endTime: routineRecord.end_time || null,
-        };
-
-        setDailyRoutine((previous) => ({
-          ...previous,
-          [selectedDate]: [
-            ...(previous[selectedDate] || []),
-            newSubject,
-          ],
-        }));
-      } catch (attendanceCreateError) {
-        // Roll back the routine if attendance creation fails.
-        await fetch(
-          `${ROUTINE_API_URL}/${routineRecord.id}`,
-          {
-            method: "DELETE",
-            headers: {
-              Authorization: `Bearer ${authToken}`,
-            },
-          }
-        );
-
-        throw attendanceCreateError;
-      }
-
-      setNewSubjectName("");
-      setNewSubjectCode("");
-      setShowAddSubject(false);
-    } catch (error) {
-      console.error(
-        "Failed to add routine:",
-        error
-      );
-
-      setRoutineError(
-        error.message || "Unable to add routine."
-      );
-    }
+    setNewSubjectName("");
+    setNewSubjectCode("");
+    setShowAddSubject(false);
   };
 
   // =====================================================
-  // EDIT / UPDATE ROUTINE
+  // DELETE SUBJECT
   // =====================================================
 
-  const openEditRoutine = (subject) => {
-    if (!subject?.id || String(subject.id).startsWith("attendance-")) {
-      return;
-    }
+  const deleteSubject = (subjectId) => {
+    setDailyRoutine((previous) => ({
+      ...previous,
 
-    setRoutineError("");
-    setAttendanceError("");
-
-    setEditingRoutine(subject);
-    setEditRoutineName(subject.name || "");
-    setEditRoutineDate(selectedDate);
-    setEditRoutineStartTime(
-      subject.startTime ? String(subject.startTime).slice(0, 5) : ""
-    );
-    setEditRoutineEndTime(
-      subject.endTime ? String(subject.endTime).slice(0, 5) : ""
-    );
-  };
-
-  const cancelEditRoutine = () => {
-    setEditingRoutine(null);
-    setEditRoutineName("");
-    setEditRoutineDate("");
-    setEditRoutineStartTime("");
-    setEditRoutineEndTime("");
-  };
-
-  const updateRoutine = async (e) => {
-    e.preventDefault();
-
-    if (!editingRoutine) {
-      return;
-    }
-
-    if (!editRoutineName.trim()) {
-      setRoutineError("Routine title is required.");
-      return;
-    }
-
-    if (!editRoutineDate) {
-      setRoutineError("Routine date is required.");
-      return;
-    }
-
-    try {
-      setRoutineError("");
-      setAttendanceError("");
-
-      const authToken = getAuthToken(token);
-
-      if (!authToken) {
-        throw new Error(
-          "Authentication token not found. Please login again."
-        );
-      }
-
-      const oldName = String(editingRoutine.name || "").trim();
-      const newName = editRoutineName.trim();
-
-      const routineResponse = await fetch(
-        `${ROUTINE_API_URL}/${editingRoutine.id}`,
-        {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${authToken}`,
-          },
-          body: JSON.stringify({
-            routine_date: editRoutineDate,
-            title: newName,
-            start_time: editRoutineStartTime || null,
-            end_time: editRoutineEndTime || null,
-          }),
-        }
-      );
-
-      const routineData = await routineResponse.json();
-
-      if (!routineResponse.ok) {
-        throw new Error(
-          routineData.message || "Failed to update routine"
-        );
-      }
-
-      // Keep the linked attendance record synchronized when the
-      // routine subject name or date changes.
-      if (editingRoutine.attendanceId) {
-        const attendanceResponse = await fetch(
-          `${ATTENDANCE_API_URL}/${editingRoutine.attendanceId}`,
-          {
-            method: "PUT",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${authToken}`,
-            },
-            body: JSON.stringify({
-              subject: newName,
-              attendance_date: editRoutineDate,
-            }),
-          }
-        );
-
-        const attendanceData = await attendanceResponse.json();
-
-        if (!attendanceResponse.ok) {
-          // Roll the routine back if its linked attendance cannot
-          // be synchronized.
-          await fetch(
-            `${ROUTINE_API_URL}/${editingRoutine.id}`,
-            {
-              method: "PUT",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${authToken}`,
-              },
-              body: JSON.stringify({
-                routine_date: selectedDate,
-                title: oldName,
-                start_time: editingRoutine.startTime || null,
-                end_time: editingRoutine.endTime || null,
-              }),
-            }
-          );
-
-          throw new Error(
-            attendanceData.message ||
-            "Failed to update linked attendance"
-          );
-        }
-      }
-
-      cancelEditRoutine();
-
-      // Reload from PostgreSQL so the UI exactly matches backend data.
-      await loadRoutine();
-
-      // If the routine was moved to another date, show that date.
-      setSelectedDate(editRoutineDate);
-
-    } catch (error) {
-      console.error(
-        "Failed to update routine:",
-        error
-      );
-
-      setRoutineError(
-        error.message ||
-        "Unable to update routine."
-      );
-    }
-  };
-
-
-  // =====================================================
-  // DELETE SUBJECT / ROUTINE
-  // =====================================================
-
-  const deleteSubject = async (subject) => {
-    try {
-      setRoutineError("");
-      setAttendanceError("");
-
-      const authToken = getAuthToken(token);
-
-      if (!authToken) {
-        throw new Error(
-          "Authentication token not found. Please login again."
-        );
-      }
-
-      if (
-        subject.id &&
-        !String(subject.id).startsWith("attendance-")
-      ) {
-        const routineResponse = await fetch(
-          `${ROUTINE_API_URL}/${subject.id}`,
-          {
-            method: "DELETE",
-            headers: {
-              Authorization: `Bearer ${authToken}`,
-            },
-          }
-        );
-
-        const routineData =
-          await routineResponse.json();
-
-        if (!routineResponse.ok) {
-          throw new Error(
-            routineData.message ||
-            "Failed to delete routine"
-          );
-        }
-      }
-
-      if (subject.attendanceId) {
-        const attendanceResponse = await fetch(
-          `${ATTENDANCE_API_URL}/${subject.attendanceId}`,
-          {
-            method: "DELETE",
-            headers: {
-              Authorization: `Bearer ${authToken}`,
-            },
-          }
-        );
-
-        const attendanceData =
-          await attendanceResponse.json();
-
-        if (!attendanceResponse.ok) {
-          throw new Error(
-            attendanceData.message ||
-            "Failed to delete attendance"
-          );
-        }
-      }
-
-      setDailyRoutine((previous) => ({
-        ...previous,
-        [selectedDate]: (
-          previous[selectedDate] || []
-        ).filter(
-          (item) =>
-            String(item.id) !== String(subject.id)
-        ),
-      }));
-    } catch (error) {
-      console.error(
-        "Failed to delete routine:",
-        error
-      );
-
-      setRoutineError(
-        error.message ||
-        "Unable to delete routine."
-      );
-    }
+      [selectedDate]: (
+        previous[selectedDate] || []
+      ).filter(
+        (subject) =>
+          subject.id !== subjectId
+      ),
+    }));
   };
 
   // =====================================================
   // MARK ATTENDANCE
   // =====================================================
 
-  const markAttendance = async (
-    subject,
+  const markAttendance = (
+    subjectId,
     status
   ) => {
-    try {
-      setAttendanceError("");
+    setDailyRoutine((previous) => ({
+      ...previous,
 
-      const authToken = getAuthToken(token);
-
-      if (!authToken) {
-        throw new Error(
-          "Authentication token not found. Please login again."
-        );
-      }
-
-      let attendanceId = subject.attendanceId;
-
-      if (attendanceId) {
-        const response = await fetch(
-          `${ATTENDANCE_API_URL}/${attendanceId}`,
-          {
-            method: "PUT",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${authToken}`,
-            },
-            body: JSON.stringify({
+      [selectedDate]: (
+        previous[selectedDate] || []
+      ).map((subject) =>
+        subject.id === subjectId
+          ? {
+              ...subject,
               status,
-            }),
-          }
-        );
-
-        const data = await response.json();
-
-        if (!response.ok) {
-          throw new Error(
-            data.message ||
-            "Failed to update attendance"
-          );
-        }
-
-        attendanceId = String(data.attendance.id);
-      } else {
-        const response = await fetch(
-          ATTENDANCE_API_URL,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${authToken}`,
-            },
-            body: JSON.stringify({
-              subject: subject.name,
-              attendance_date: selectedDate,
-              status,
-            }),
-          }
-        );
-
-        const data = await response.json();
-
-        if (!response.ok) {
-          throw new Error(
-            data.message ||
-            "Failed to create attendance"
-          );
-        }
-
-        attendanceId = String(data.attendance.id);
-      }
-
-      setDailyRoutine((previous) => ({
-        ...previous,
-        [selectedDate]: (
-          previous[selectedDate] || []
-        ).map((item) =>
-          String(item.id) === String(subject.id)
-            ? {
-                ...item,
-                attendanceId,
-                status,
-              }
-            : item
-        ),
-      }));
-    } catch (error) {
-      console.error(
-        "Failed to update attendance:",
-        error
-      );
-
-      setAttendanceError(
-        error.message ||
-        "Unable to update attendance."
-      );
-    }
+            }
+          : subject
+      ),
+    }));
   };
 
   // =====================================================
@@ -1264,7 +2037,7 @@ function Dashboard({
 
 
           <div className="sidebar-version">
-            EMPAIR v0.9
+            EMPAIR v0.5
           </div>
 
         </div>
@@ -1445,7 +2218,10 @@ function Dashboard({
 
                 {/* FINANCE */}
 
-                <div className="stat-card">
+                <div
+                  className="stat-card journey-card"
+                  onClick={() => handleNavigation("Finance")}
+                >
 
                   <div className="stat-icon">
                     ₹
@@ -1458,13 +2234,17 @@ function Dashboard({
                     </span>
 
                     <h3>
-                      ₹2,450
+                      ₹{formatFinanceAmount(financeThisMonthExpense)}
                     </h3>
 
                     <p>
                       Total expenses
                     </p>
 
+                  </div>
+
+                  <div className="stat-arrow">
+                    →
                   </div>
 
                 </div>
@@ -1517,7 +2297,10 @@ function Dashboard({
                 </button>
 
 
-                <button className="quick-action">
+                <button
+                  className="quick-action"
+                  onClick={() => openFinanceForm(null, "expense")}
+                >
 
                   <span>
                     ₹
@@ -1610,533 +2393,1123 @@ function Dashboard({
             MY JOURNEY
            ================================================= */}
 
-        {activePage === "My Journey" &&
-          !semesterOpen && (
+        {activePage === "My Journey" && !semesterOpen && (
+          <section className="journey-page">
 
-            <section className="journey-page">
-
-              <div className="journey-header">
-
-                <div>
-
-                  <span className="dashboard-label">
-                    MY JOURNEY
-                  </span>
-
-                  <h1>
-                    B.Tech Journey
-                  </h1>
-
-                  <p>
-                    Your complete four-year
-                    academic journey,
-                    captured in one place.
-                  </p>
-
-                </div>
-
-
-                <div className="journey-year-badge">
-                  YEAR 1
-                </div>
-
+            <div className="journey-header">
+              <div>
+                <span className="dashboard-label">MY JOURNEY</span>
+                <h1>B.Tech Journey</h1>
+                <p>
+                  Your complete four-year academic journey, captured in one place.
+                </p>
               </div>
 
+              <div className="journey-year-badge">
+                YEAR {currentJourneyYear}
+              </div>
+            </div>
+
+            <div
+              style={{
+                marginBottom: "24px",
+                padding: "22px",
+                borderRadius: "20px",
+                border: "1px solid rgba(255,255,255,0.08)",
+                background: "rgba(255,255,255,0.025)",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "flex-start",
+                  gap: "16px",
+                  flexWrap: "wrap",
+                  marginBottom: "16px",
+                }}
+              >
+                <div>
+                  <span
+                    style={{
+                      display: "block",
+                      fontSize: "11px",
+                      letterSpacing: "0.16em",
+                      opacity: 0.65,
+                      marginBottom: "6px",
+                    }}
+                  >
+                    JOURNEY PROGRESS
+                  </span>
+                  <h2 style={{ margin: 0 }}>
+                    {name || "Your"} · B.Tech Journey
+                  </h2>
+                  <p style={{ margin: "7px 0 0", opacity: 0.7 }}>
+                    Semester {currentJourneySemester} of 8 · Year {currentJourneyYear} of 4
+                  </p>
+                </div>
+
+                <strong style={{ fontSize: "24px" }}>
+                  {Math.round(journeyProgressPercent)}%
+                </strong>
+              </div>
 
               <div
-                className="journey-current-card journey-clickable"
-                onClick={openSemester}
+                style={{
+                  height: "9px",
+                  borderRadius: "999px",
+                  overflow: "hidden",
+                  background: "rgba(255,255,255,0.08)",
+                }}
               >
+                <div
+                  style={{
+                    width: `${journeyProgressPercent}%`,
+                    height: "100%",
+                    borderRadius: "999px",
+                    background: "linear-gradient(90deg, #6d5dfc, #27d9c8)",
+                    transition: "width 0.3s ease",
+                  }}
+                />
+              </div>
 
-                <div className="journey-current-icon">
-                  🎓
-                </div>
-
-
-                <div className="journey-current-content">
-
-                  <span>
-                    CURRENTLY IN
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+                  gap: "12px",
+                  marginTop: "16px",
+                }}
+              >
+                <div>
+                  <span style={{ display: "block", fontSize: "11px", opacity: 0.55 }}>
+                    COMPLETED
                   </span>
-
-                  <h2>
-                    Semester 1
-                  </h2>
-
-                  <p>
-                    B.Tech Computer Science
-                    & Engineering
-                  </p>
-
+                  <strong>{journeyCompletedSemesters} semesters</strong>
                 </div>
-
-
-                <div className="journey-current-status">
-                  ACTIVE
+                <div>
+                  <span style={{ display: "block", fontSize: "11px", opacity: 0.55 }}>
+                    REMAINING
+                  </span>
+                  <strong>{journeyRemainingSemesters} semesters</strong>
                 </div>
+                <div>
+                  <span style={{ display: "block", fontSize: "11px", opacity: 0.55 }}>
+                    GRADUATION
+                  </span>
+                  <strong>
+                    {journeyProfile?.graduation_year || "Not set"}
+                  </strong>
+                </div>
+                <div>
+                  <span style={{ display: "block", fontSize: "11px", opacity: 0.55 }}>
+                    TIME LEFT
+                  </span>
+                  <strong>
+                    {journeyYearsRemaining === null
+                      ? "Not set"
+                      : journeyYearsRemaining === 1
+                        ? "1 year"
+                        : `${journeyYearsRemaining} years`}
+                  </strong>
+                </div>
+              </div>
+            </div>
 
+            {journeyError && (
+              <div className="tasks-storage-note">
+                <strong>My Journey</strong>
+                <span>{journeyError}</span>
+              </div>
+            )}
+
+            {journeyLoading && (
+              <div className="tasks-storage-note">
+                <strong>Loading journey...</strong>
+                <span>Fetching your journey data from PostgreSQL.</span>
+              </div>
+            )}
+
+            <div className="journey-current-card journey-clickable" onClick={openSemester}>
+              <div className="journey-current-icon">🎓</div>
+
+              <div className="journey-current-content">
+                <span>CURRENTLY IN</span>
+                <h2>Semester {currentJourneySemester}</h2>
+                <p>
+                  {journeyProfile?.degree || "B.Tech"}{" "}
+                  {journeyProfile?.branch || "Computer Science & Engineering"}
+                </p>
               </div>
 
+              <div className="journey-current-status">ACTIVE</div>
+            </div>
 
-              <div className="journey-section-title">
+            <div className="journey-section-title">
+              <span>YOUR TIMELINE</span>
+              <h2>Four Years. One Journey.</h2>
+            </div>
 
-                <span>
-                  YOUR TIMELINE
-                </span>
+            <div className="years-grid">
+              {[1, 2, 3, 4].map((year) => {
+                const isCurrent = year === currentJourneyYear;
+                const isCompleted = year < currentJourneyYear;
 
-                <h2>
-                  Four Years. One Journey.
-                </h2>
-
-              </div>
-
-
-              <div className="years-grid">
-
-
-                <div className="year-card active-year">
-
-                  <div className="year-card-top">
-
-                    <div className="year-number">
-                      01
+                return (
+                  <div
+                    className={`year-card ${isCurrent ? "active-year" : ""}`}
+                    key={year}
+                  >
+                    <div className="year-card-top">
+                      <div className="year-number">
+                        {String(year).padStart(2, "0")}
+                      </div>
+                      <div className={`year-status ${!isCurrent ? "locked" : ""}`}>
+                        {isCurrent ? "CURRENT" : isCompleted ? "COMPLETED" : "UPCOMING"}
+                      </div>
                     </div>
 
-                    <div className="year-status">
-                      CURRENT
-                    </div>
+                    <h3>Year {year}</h3>
+                    <p>
+                      {year === 1
+                        ? "Foundation"
+                        : year === 2
+                          ? "Exploration"
+                          : year === 3
+                            ? "Growth"
+                            : "Launch"}
+                    </p>
 
+                    {isCurrent ? (
+                      <div className="semester-list">
+                        {[1, 2].map((semester) => {
+                          const semesterNumber = (year - 1) * 2 + semester;
+                          const isActiveSemester = semesterNumber === currentJourneySemester;
+
+                          return (
+                            <div
+                              className={`semester-item ${
+                                isActiveSemester
+                                  ? "active-semester semester-clickable"
+                                  : ""
+                              }`}
+                              key={semesterNumber}
+                              onClick={
+                                isActiveSemester ? openSemester : undefined
+                              }
+                            >
+                              <span>SEM {String(semesterNumber).padStart(2, "0")}</span>
+                              <strong>
+                                {isActiveSemester
+                                  ? "Current Semester"
+                                  : semesterNumber < currentJourneySemester
+                                    ? "Completed"
+                                    : "Upcoming"}
+                              </strong>
+                              {isActiveSemester && <b>→</b>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="locked-message">
+                        <span>{isCompleted ? "✓" : "🔒"}</span>
+                        <span>
+                          {isCompleted
+                            ? "Year completed"
+                            : "Journey not started yet"}
+                        </span>
+                      </div>
+                    )}
                   </div>
+                );
+              })}
+            </div>
 
+            <div className="journey-stats">
+              <div className="journey-stat">
+                <span>SEMESTERS</span>
+                <strong>{journeySemesterProgress} / 8</strong>
+              </div>
+              <div className="journey-stat">
+                <span>PROJECTS</span>
+                <strong>{journeyProjects.length}</strong>
+              </div>
+              <div className="journey-stat">
+                <span>CERTIFICATES</span>
+                <strong>{journeyCertificates.length}</strong>
+              </div>
+              <div className="journey-stat">
+                <span>HACKATHONS</span>
+                <strong>{journeyHackathons.length}</strong>
+              </div>
+            </div>
 
-                  <h3>
-                    Year 1
-                  </h3>
+            <div className="semester-section">
+              <div className="semester-section-heading">
+                <div>
+                  <span>JOURNEY PROFILE</span>
+                  <h2>Your Academic Information</h2>
+                </div>
 
-                  <p>
-                    Foundation
-                  </p>
+                <button
+                  type="button"
+                  className="tasks-add-button"
+                  onClick={openJourneyProfileForm}
+                >
+                  ✎ Edit Profile
+                </button>
+              </div>
 
+              <div className="semester-record-grid">
+                <div className="semester-record-card">
+                  <div>🏫</div>
+                  <strong>College</strong>
+                  <span>{journeyProfile?.college || "Not added yet"}</span>
+                </div>
 
-                  <div className="semester-list">
+                <div className="semester-record-card">
+                  <div>🎓</div>
+                  <strong>Degree</strong>
+                  <span>{journeyProfile?.degree || "Not added yet"}</span>
+                </div>
 
-                    <div
-                      className="semester-item active-semester semester-clickable"
-                      onClick={openSemester}
+                <div className="semester-record-card">
+                  <div>💻</div>
+                  <strong>Branch</strong>
+                  <span>{journeyProfile?.branch || "Not added yet"}</span>
+                </div>
+
+                <div className="semester-record-card">
+                  <div>📅</div>
+                  <strong>Graduation</strong>
+                  <span>
+                    {journeyProfile?.graduation_year || "Not added yet"}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {showJourneyProfileForm && (
+              <form className="task-form-card" onSubmit={saveJourneyProfile}>
+                <div className="task-form-heading">
+                  <div>
+                    <span>JOURNEY PROFILE</span>
+                    <h2>Update your academic information</h2>
+                  </div>
+                  <button
+                    type="button"
+                    className="task-form-close"
+                    onClick={() => setShowJourneyProfileForm(false)}
+                  >
+                    ×
+                  </button>
+                </div>
+
+                <div className="task-form-grid">
+                  <label>
+                    <span>College</span>
+                    <input
+                      value={journeyCollege}
+                      onChange={(e) => setJourneyCollege(e.target.value)}
+                      placeholder="NIT Bhubaneswar"
+                    />
+                  </label>
+
+                  <label>
+                    <span>Degree</span>
+                    <input
+                      value={journeyDegree}
+                      onChange={(e) => setJourneyDegree(e.target.value)}
+                      placeholder="B.Tech"
+                    />
+                  </label>
+
+                  <label>
+                    <span>Branch</span>
+                    <input
+                      value={journeyBranch}
+                      onChange={(e) => setJourneyBranch(e.target.value)}
+                      placeholder="Computer Science & Engineering"
+                    />
+                  </label>
+
+                  <label>
+                    <span>Current Year</span>
+                    <select
+                      value={journeyYear}
+                      onChange={(e) => setJourneyYear(e.target.value)}
                     >
+                      <option value="1">Year 1</option>
+                      <option value="2">Year 2</option>
+                      <option value="3">Year 3</option>
+                      <option value="4">Year 4</option>
+                    </select>
+                  </label>
 
-                      <span>
-                        SEM 01
-                      </span>
+                  <label>
+                    <span>Current Semester</span>
+                    <select
+                      value={journeySemester}
+                      onChange={(e) => setJourneySemester(e.target.value)}
+                    >
+                      {Array.from({ length: 8 }, (_, index) => (
+                        <option key={index + 1} value={index + 1}>
+                          Semester {index + 1}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
 
-                      <strong>
-                        Current Semester
-                      </strong>
+                  <label>
+                    <span>Start Year</span>
+                    <input
+                      type="number"
+                      value={journeyStartYear}
+                      onChange={(e) => setJourneyStartYear(e.target.value)}
+                      placeholder="2026"
+                    />
+                  </label>
 
-                      <b>
-                        →
-                      </b>
-
-                    </div>
-
-
-                    <div className="semester-item">
-
-                      <span>
-                        SEM 02
-                      </span>
-
-                      <strong>
-                        Upcoming
-                      </strong>
-
-                    </div>
-
-                  </div>
-
+                  <label>
+                    <span>Graduation Year</span>
+                    <input
+                      type="number"
+                      value={journeyGraduationYear}
+                      onChange={(e) => setJourneyGraduationYear(e.target.value)}
+                      placeholder="2030"
+                    />
+                  </label>
                 </div>
 
+                <div className="task-form-actions">
+                  <button
+                    type="button"
+                    className="task-secondary-button"
+                    onClick={() => setShowJourneyProfileForm(false)}
+                  >
+                    Cancel
+                  </button>
+                  <button type="submit" className="task-primary-button">
+                    Save Profile
+                  </button>
+                </div>
+              </form>
+            )}
 
-                <div className="year-card">
-
-                  <div className="year-card-top">
-
-                    <div className="year-number">
-                      02
-                    </div>
-
-                    <div className="year-status locked">
-                      UPCOMING
-                    </div>
-
-                  </div>
-
-
-                  <h3>
-                    Year 2
-                  </h3>
-
-                  <p>
-                    Exploration
-                  </p>
-
-
-                  <div className="locked-message">
-
-                    <span>
-                      🔒
-                    </span>
-
-                    <span>
-                      Journey not started yet
-                    </span>
-
-                  </div>
-
+            <div className="semester-section">
+              <div className="semester-section-heading">
+                <div>
+                  <span>ACHIEVEMENTS</span>
+                  <h2>Projects, Certificates & Hackathons</h2>
                 </div>
 
-
-                <div className="year-card">
-
-                  <div className="year-card-top">
-
-                    <div className="year-number">
-                      03
-                    </div>
-
-                    <div className="year-status locked">
-                      UPCOMING
-                    </div>
-
-                  </div>
-
-
-                  <h3>
-                    Year 3
-                  </h3>
-
-                  <p>
-                    Growth
-                  </p>
-
-
-                  <div className="locked-message">
-
-                    <span>
-                      🔒
-                    </span>
-
-                    <span>
-                      Journey not started yet
-                    </span>
-
-                  </div>
-
-                </div>
-
-
-                <div className="year-card">
-
-                  <div className="year-card-top">
-
-                    <div className="year-number">
-                      04
-                    </div>
-
-                    <div className="year-status locked">
-                      UPCOMING
-                    </div>
-
-                  </div>
-
-
-                  <h3>
-                    Year 4
-                  </h3>
-
-                  <p>
-                    Launch
-                  </p>
-
-
-                  <div className="locked-message">
-
-                    <span>
-                      🔒
-                    </span>
-
-                    <span>
-                      Journey not started yet
-                    </span>
-
-                  </div>
-
-                </div>
-
+                <button
+                  type="button"
+                  className="tasks-add-button"
+                  onClick={() => openJourneyItemForm()}
+                >
+                  ＋ Add Achievement
+                </button>
               </div>
 
-
-              <div className="journey-stats">
-
-                <div className="journey-stat">
-
-                  <span>
-                    SEMESTERS
-                  </span>
-
-                  <strong>
-                    1 / 8
-                  </strong>
-
-                </div>
-
-
-                <div className="journey-stat">
-
-                  <span>
-                    PROJECTS
-                  </span>
-
-                  <strong>
-                    0
-                  </strong>
-
-                </div>
-
-
-                <div className="journey-stat">
-
-                  <span>
-                    CERTIFICATES
-                  </span>
-
-                  <strong>
-                    0
-                  </strong>
-
-                </div>
-
-
-                <div className="journey-stat">
-
-                  <span>
-                    HACKATHONS
-                  </span>
-
-                  <strong>
-                    0
-                  </strong>
-
-                </div>
-
+              <div className="tasks-storage-note">
+                <strong>Google Drive Storage</strong>
+                <span>
+                  Store large project ZIPs, PDFs and images in Google Drive and
+                  keep the sharing link here. EMPAIR does not upload these large
+                  files to its own server.
+                </span>
               </div>
 
-            </section>
+              {journeyItems.length > 0 && (
+                <div className="journey-achievement-filters">
+                  {[
+                    ["all", `All (${journeyItems.length})`],
+                    ["project", `Projects (${journeyProjects.length})`],
+                    ["certificate", `Certificates (${journeyCertificates.length})`],
+                    ["hackathon", `Hackathons (${journeyHackathons.length})`],
+                  ].map(([filter, label]) => (
+                    <button
+                      key={filter}
+                      type="button"
+                      className={`journey-filter-button ${
+                        journeyAchievementFilter === filter ? "active" : ""
+                      }`}
+                      onClick={() => setJourneyAchievementFilter(filter)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
 
-          )}
+              {journeyItems.length === 0 ? (
+                <div className="tasks-empty-state">
+                  <div>🚀</div>
+                  <h3>No achievements added yet</h3>
+                  <p>
+                    Add your projects, certificates and hackathons to build your journey.
+                  </p>
+                  <button
+                    type="button"
+                    className="task-primary-button"
+                    onClick={() => openJourneyItemForm()}
+                  >
+                    ＋ Add Achievement
+                  </button>
+                </div>
+              ) : filteredJourneyItems.length === 0 ? (
+                <div className="tasks-empty-state">
+                  <div>🔎</div>
+                  <h3>No {journeyAchievementFilter} achievements</h3>
+                  <p>
+                    There are no achievements in this category yet. Add one to keep your journey updated.
+                  </p>
+                  <button
+                    type="button"
+                    className="task-primary-button"
+                    onClick={() => {
+                      openJourneyItemForm();
+                      setJourneyItemType(
+                        journeyAchievementFilter === "all"
+                          ? "project"
+                          : journeyAchievementFilter
+                      );
+                    }}
+                  >
+                    ＋ Add Achievement
+                  </button>
+                </div>
+              ) : (
+                <div className="tasks-list">
+                  {filteredJourneyItems.map((item) => (
+                    <article className="task-item" key={item.id}>
+                      <div className="task-check-button">
+                        {item.type === "project"
+                          ? "🚀"
+                          : item.type === "certificate"
+                            ? "📜"
+                            : "🏆"}
+                      </div>
 
+                      <div className="task-item-main">
+                        <div className="task-item-top">
+                          <h3>{item.title}</h3>
+                          <span className="task-priority medium">
+                            {item.type.toUpperCase()}
+                          </span>
+                        </div>
+
+                        {item.description && <p>{item.description}</p>}
+
+                        <div className="task-item-meta">
+                          {item.item_date && <span>📅 {item.item_date}</span>}
+                          {item.link && (
+                            <span>📁 Google Drive file attached</span>
+                          )}
+                        </div>
+
+                        {item.link && (
+                          <div
+                            style={{
+                              display: "flex",
+                              gap: "10px",
+                              flexWrap: "wrap",
+                              marginTop: "12px",
+                            }}
+                          >
+                            <a
+                              href={item.link}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="task-primary-button"
+                              style={{
+                                width: "fit-content",
+                                textDecoration: "none",
+                              }}
+                            >
+                              📁 Open Google Drive
+                            </a>
+
+                            {getGoogleDriveDownloadUrl(item.link) && (
+                              <a
+                                href={getGoogleDriveDownloadUrl(item.link)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="task-secondary-button"
+                                style={{
+                                  width: "fit-content",
+                                  textDecoration: "none",
+                                }}
+                              >
+                                ⬇ Download
+                              </a>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="task-item-actions">
+                        <button
+                          type="button"
+                          onClick={() => openJourneyItemForm(item)}
+                          title="Edit achievement"
+                        >
+                          ✎
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteJourneyItem(item.id)}
+                          title="Delete achievement"
+                        >
+                          🗑
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {journeyItemFormOpen && (
+              <form className="task-form-card" onSubmit={saveJourneyItem}>
+                <div className="task-form-heading">
+                  <div>
+                    <span>
+                      {editingJourneyItemId ? "EDIT ACHIEVEMENT" : "NEW ACHIEVEMENT"}
+                    </span>
+                    <h2>
+                      {editingJourneyItemId
+                        ? "Update your achievement"
+                        : "Add to your journey"}
+                    </h2>
+                  </div>
+                  <button
+                    type="button"
+                    className="task-form-close"
+                    onClick={resetJourneyItemForm}
+                  >
+                    ×
+                  </button>
+                </div>
+
+                <div className="task-form-grid">
+                  <label>
+                    <span>Type</span>
+                    <select
+                      value={journeyItemType}
+                      onChange={(e) => setJourneyItemType(e.target.value)}
+                    >
+                      <option value="project">Project</option>
+                      <option value="certificate">Certificate</option>
+                      <option value="hackathon">Hackathon</option>
+                    </select>
+                  </label>
+
+                  <label>
+                    <span>Title</span>
+                    <input
+                      value={journeyItemTitle}
+                      onChange={(e) => setJourneyItemTitle(e.target.value)}
+                      placeholder="e.g. EMPAIR Personal Life OS"
+                      autoFocus
+                    />
+                  </label>
+
+                  <label className="task-form-full">
+                    <span>Description</span>
+                    <textarea
+                      value={journeyItemDescription}
+                      onChange={(e) => setJourneyItemDescription(e.target.value)}
+                      placeholder="Describe this achievement..."
+                      rows="4"
+                    />
+                  </label>
+
+                  <label>
+                    <span>Date</span>
+                    <input
+                      type="date"
+                      value={journeyItemDate}
+                      onChange={(e) => setJourneyItemDate(e.target.value)}
+                    />
+                  </label>
+
+                  <label>
+                    <span>Google Drive Project File</span>
+                    <input
+                      type="url"
+                      value={journeyItemLink}
+                      onChange={(e) => setJourneyItemLink(e.target.value)}
+                      placeholder="Paste Google Drive sharing link"
+                    />
+                    <small
+                      style={{
+                        display: "block",
+                        marginTop: "8px",
+                        opacity: 0.7,
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      Upload the project/certificate file to Google Drive, set
+                      access as needed, then paste its sharing link here. EMPAIR
+                      stores only the link, not the large file itself.
+                    </small>
+                  </label>
+                </div>
+
+                <div className="task-form-actions">
+                  <button
+                    type="button"
+                    className="task-secondary-button"
+                    onClick={resetJourneyItemForm}
+                  >
+                    Cancel
+                  </button>
+                  <button type="submit" className="task-primary-button">
+                    {editingJourneyItemId ? "Save Changes" : "Add Achievement"}
+                  </button>
+                </div>
+              </form>
+            )}
+          </section>
+        )}
 
         {/* =================================================
             SEMESTER 1
            ================================================= */}
 
-        {activePage === "My Journey" &&
-          semesterOpen && (
+        {activePage === "My Journey" && semesterOpen && (
+          <section className="semester-page">
+            <button
+              className="semester-back-button"
+              onClick={() => setSemesterOpen(false)}
+            >
+              ← Back to My Journey
+            </button>
 
-            <section className="semester-page">
+            <div className="semester-header">
+              <div>
+                <span className="dashboard-label">
+                  YEAR {currentJourneyYear} · SEMESTER {currentJourneySemester}
+                </span>
+                <h1>Semester {currentJourneySemester}</h1>
+                <p>Your current academic semester.</p>
+              </div>
+              <div className="semester-active-badge">ACTIVE</div>
+            </div>
 
-              <button
-                className="semester-back-button"
-                onClick={() =>
-                  setSemesterOpen(false)
-                }
-              >
-                ← Back to My Journey
-              </button>
+            <div className="semester-summary">
+              <div className="semester-summary-card">
+                <span>DAILY SUBJECTS</span>
+                <strong>{todaySubjects.length}</strong>
+              </div>
+              <div className="semester-summary-card">
+                <span>TODAY PRESENT</span>
+                <strong>{presentToday}</strong>
+              </div>
+              <div className="semester-summary-card">
+                <span>OVERALL</span>
+                <strong>{overallAttendance}%</strong>
+              </div>
+              <div className="semester-summary-card">
+                <span>STATUS</span>
+                <strong>ON TRACK</strong>
+              </div>
+            </div>
 
-
-              <div className="semester-header">
-
+            <div className="semester-section">
+              <div className="semester-section-heading">
                 <div>
-
-                  <span className="dashboard-label">
-                    YEAR 1 · SEMESTER 1
-                  </span>
-
-                  <h1>
-                    Semester 1
-                  </h1>
-
-                  <p>
-                    Your current academic semester.
-                  </p>
-
+                  <span>ACADEMICS</span>
+                  <h2>Semester Information</h2>
                 </div>
-
-
-                <div className="semester-active-badge">
-                  ACTIVE
-                </div>
-
               </div>
 
+              <div className="semester-record-grid">
+                <button
+                  type="button"
+                  className="semester-record-card"
+                  onClick={() => handleNavigation("Attendance")}
+                >
+                  <div>📅</div>
+                  <strong>Daily Routine</strong>
+                  <span>Open your daily routine and manage subjects.</span>
+                </button>
 
-              <div className="semester-summary">
+                <button
+                  type="button"
+                  className="semester-record-card"
+                  onClick={() => handleNavigation("Attendance")}
+                >
+                  <div>📚</div>
+                  <strong>Attendance</strong>
+                  <span>Mark classes and view your attendance record.</span>
+                </button>
 
-                <div className="semester-summary-card">
+                <button
+                  type="button"
+                  className="semester-record-card"
+                  onClick={() => setShowSemesterProgress((previous) => !previous)}
+                >
+                  <div>📊</div>
+                  <strong>Progress</strong>
+                  <span>View your current semester academic progress.</span>
+                </button>
 
-                  <span>
-                    DAILY SUBJECTS
-                  </span>
-
-                  <strong>
-                    {todaySubjects.length}
-                  </strong>
-
-                </div>
-
-
-                <div className="semester-summary-card">
-
-                  <span>
-                    TODAY PRESENT
-                  </span>
-
-                  <strong>
-                    {presentToday}
-                  </strong>
-
-                </div>
-
-
-                <div className="semester-summary-card">
-
-                  <span>
-                    OVERALL
-                  </span>
-
-                  <strong>
-                    {overallAttendance}%
-                  </strong>
-
-                </div>
-
-
-                <div className="semester-summary-card">
-
-                  <span>
-                    STATUS
-                  </span>
-
-                  <strong>
-                    ON TRACK
-                  </strong>
-
-                </div>
-
+                <button
+                  type="button"
+                  className="semester-record-card"
+                  onClick={() => {
+                    setShowSemesterNotes((previous) => !previous);
+                    setShowSemesterProgress(false);
+                  }}
+                >
+                  <div>📝</div>
+                  <strong>Notes</strong>
+                  <span>{journeyNotes.length} saved semester {journeyNotes.length === 1 ? "note" : "notes"}.</span>
+                </button>
               </div>
 
-
-              <div className="semester-section">
-
-                <div className="semester-section-heading">
-
-                  <div>
-
-                    <span>
-                      ACADEMICS
-                    </span>
-
-                    <h2>
-                      Semester Information
-                    </h2>
-
+              {showSemesterProgress && (
+                <div className="semester-section">
+                  <div className="semester-section-heading">
+                    <div>
+                      <span>SEMESTER PROGRESS</span>
+                      <h2>Current Academic Progress</h2>
+                    </div>
+                    <button
+                      type="button"
+                      className="task-secondary-button"
+                      onClick={() => setShowSemesterProgress(false)}
+                    >
+                      Close
+                    </button>
                   </div>
 
+                  <div className="semester-summary">
+                    <div className="semester-summary-card">
+                      <span>ATTENDANCE</span>
+                      <strong>{overallAttendance}%</strong>
+                    </div>
+                    <div className="semester-summary-card">
+                      <span>CLASSES MARKED</span>
+                      <strong>{totalMarked}</strong>
+                    </div>
+                    <div className="semester-summary-card">
+                      <span>PRESENT</span>
+                      <strong>{totalPresent}</strong>
+                    </div>
+                    <div className="semester-summary-card">
+                      <span>ABSENT</span>
+                      <strong>{totalMarked - totalPresent}</strong>
+                    </div>
+                  </div>
+
+                  <div className="attendance-overall-card">
+                    <div className="attendance-overall-left">
+                      <span>SEMESTER ATTENDANCE PROGRESS</span>
+                      <h2>{overallAttendance}%</h2>
+                      <p>{totalPresent} present · {totalMarked - totalPresent} absent · {todaySubjects.length} classes today</p>
+                    </div>
+                    <div className="attendance-big-progress">
+                      <div
+                        className="attendance-big-progress-fill"
+                        style={{ width: `${overallAttendance}%` }}
+                      ></div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {showSemesterNotes && (
+                <div className="semester-section">
+                  <div className="semester-section-heading">
+                    <div>
+                      <span>SEMESTER NOTES</span>
+                      <h2>Your Semester {currentJourneySemester} Notes</h2>
+                    </div>
+                    <button
+                      type="button"
+                      className="tasks-add-button"
+                      onClick={() => openNoteForm()}
+                    >
+                      ＋ Add Note
+                    </button>
+                  </div>
+
+                  {journeyNotesError && (
+                    <div className="tasks-storage-note">
+                      <strong>Notes</strong>
+                      <span>{journeyNotesError}</span>
+                    </div>
+                  )}
+
+                  {journeyNotesLoading ? (
+                    <div className="tasks-storage-note">
+                      <strong>Loading notes...</strong>
+                      <span>Fetching your semester notes from PostgreSQL.</span>
+                    </div>
+                  ) : journeyNotes.length === 0 ? (
+                    <div className="tasks-empty-state">
+                      <div>📝</div>
+                      <h3>No semester notes yet</h3>
+                      <p>Save important academic information, ideas, reminders, and semester notes here.</p>
+                      <button
+                        type="button"
+                        className="task-primary-button"
+                        onClick={() => openNoteForm()}
+                      >
+                        ＋ Create Note
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="tasks-list">
+                      {journeyNotes.map((note) => (
+                        <article className="task-item" key={note.id}>
+                          <div className="task-item-main">
+                            <div className="task-item-top">
+                              <h3>{note.title}</h3>
+                              <span className="task-priority medium">SEM {note.semester}</span>
+                            </div>
+                            {note.content && <p>{note.content}</p>}
+                            <div className="task-item-meta">
+                              <span>📅 {formatTaskDueDate(note.note_date)}</span>
+                              {note.file_name && (
+                                <span>📎 {note.file_name}</span>
+                              )}
+                            </div>
+                            {note.file_name && (
+                              <button
+                                type="button"
+                                className="task-primary-button"
+                                style={{ marginTop: "12px", width: "fit-content" }}
+                                onClick={() => viewJourneyNoteFile(note)}
+                              >
+                                {note.mime_type === "application/pdf" ? "📄 Open PDF" : "🖼 Open Image"}
+                              </button>
+                            )}
+                          </div>
+                          <div className="task-item-actions">
+                            <button
+                              type="button"
+                              onClick={() => openNoteForm(note)}
+                              aria-label="Edit note"
+                              title="Edit note"
+                            >
+                              ✎
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => deleteJourneyNote(note.id)}
+                              aria-label="Delete note"
+                              title="Delete note"
+                            >
+                              🗑
+                            </button>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+
+                  {showNoteForm && (
+                    <form className="task-form-card" onSubmit={saveJourneyNote}>
+                      <div className="task-form-heading">
+                        <div>
+                          <span>{editingNoteId ? "EDIT NOTE" : "NEW NOTE"}</span>
+                          <h2>{editingNoteId ? "Update semester note" : "Create a semester note"}</h2>
+                        </div>
+                        <button
+                          type="button"
+                          className="task-form-close"
+                          onClick={resetNoteForm}
+                          aria-label="Close note form"
+                        >
+                          ×
+                        </button>
+                      </div>
+
+                      <div className="task-form-grid">
+                        <label>
+                          <span>Note title</span>
+                          <input
+                            type="text"
+                            value={noteTitle}
+                            onChange={(e) => setNoteTitle(e.target.value)}
+                            placeholder="e.g. Chemistry important topics"
+                            autoFocus
+                          />
+                        </label>
+
+                        <label>
+                          <span>Date</span>
+                          <input
+                            type="date"
+                            value={noteDate}
+                            onChange={(e) => setNoteDate(e.target.value)}
+                          />
+                        </label>
+
+                        <label className="task-form-full">
+                          <span>Text Note (optional)</span>
+                          <textarea
+                            value={noteContent}
+                            onChange={(e) => setNoteContent(e.target.value)}
+                            placeholder="Add a short description, reminder, or explanation..."
+                            rows="5"
+                          />
+                        </label>
+
+                        <label className="task-form-full">
+                          <span>Upload Real Note</span>
+                          <input
+                            key={noteFileInputKey}
+                            type="file"
+                            accept=".png,.jpg,.jpeg,.pdf,image/png,image/jpeg,application/pdf"
+                            onChange={(e) => setNoteFile(e.target.files?.[0] || null)}
+                          />
+                          <small style={{ marginTop: "8px", display: "block", opacity: 0.7 }}>
+                            PNG, JPG/JPEG or PDF · Maximum 500 MB
+                            {editingNoteId && " · Select a new file only if you want to replace the existing file"}
+                          </small>
+                          {noteFile && (
+                            <small style={{ marginTop: "6px", display: "block" }}>
+                              Selected: {noteFile.name}
+                            </small>
+                          )}
+                          {editingNoteId && !noteFile && journeyNotes.find((note) => String(note.id) === String(editingNoteId))?.file_name && (
+                            <small style={{ marginTop: "6px", display: "block" }}>
+                              Existing file will be kept.
+                            </small>
+                          )}
+                        </label>
+                      </div>
+
+                      <div className="task-form-actions">
+                        <button
+                          type="button"
+                          className="task-secondary-button"
+                          onClick={resetNoteForm}
+                        >
+                          Cancel
+                        </button>
+                        <button type="submit" className="task-primary-button">
+                          {editingNoteId ? "Save Changes" : "Save Note"}
+                        </button>
+                      </div>
+                    </form>
+                  )}
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
+        {viewingNote && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 9999,
+              background: "rgba(0, 0, 0, 0.82)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: "24px",
+            }}
+          >
+            <div
+              style={{
+                width: "min(1100px, 96vw)",
+                height: "min(850px, 92vh)",
+                background: "#0b0c12",
+                border: "1px solid rgba(255,255,255,0.12)",
+                borderRadius: "18px",
+                overflow: "hidden",
+                display: "flex",
+                flexDirection: "column",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: "16px",
+                  padding: "16px 20px",
+                  borderBottom: "1px solid rgba(255,255,255,0.1)",
+                }}
+              >
+                <div>
+                  <strong>{viewingNote.title}</strong>
+                  <div style={{ fontSize: "12px", opacity: 0.65, marginTop: "4px" }}>
+                    {viewingNote.file_name}
+                  </div>
                 </div>
 
-
-                <div className="semester-record-grid">
-
-                  <div className="semester-record-card">
-
-                    <div>
-                      📅
-                    </div>
-
-                    <strong>
-                      Daily Routine
-                    </strong>
-
-                    <span>
-                      Add different subjects
-                      for every college day.
-                    </span>
-
-                  </div>
-
-
-                  <div className="semester-record-card">
-
-                    <div>
-                      📚
-                    </div>
-
-                    <strong>
-                      Attendance
-                    </strong>
-
-                    <span>
-                      Mark each class as
-                      present or absent.
-                    </span>
-
-                  </div>
-
-
-                  <div className="semester-record-card">
-
-                    <div>
-                      📊
-                    </div>
-
-                    <strong>
-                      Progress
-                    </strong>
-
-                    <span>
-                      Track your attendance
-                      automatically.
-                    </span>
-
-                  </div>
-
-
-                  <div className="semester-record-card">
-
-                    <div>
-                      📝
-                    </div>
-
-                    <strong>
-                      Notes
-                    </strong>
-
-                    <span>
-                      Save important semester
-                      information.
-                    </span>
-
-                  </div>
-
-                </div>
-
+                <button
+                  type="button"
+                  className="task-form-close"
+                  onClick={closeJourneyNoteViewer}
+                  aria-label="Close note viewer"
+                >
+                  ×
+                </button>
               </div>
 
-            </section>
+              <div
+                style={{
+                  flex: 1,
+                  minHeight: 0,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: "16px",
+                }}
+              >
+                {noteViewerLoading && <strong>Opening note...</strong>}
 
-          )}
+                {!noteViewerLoading && noteViewerError && (
+                  <div className="tasks-storage-note">
+                    <strong>Unable to open file</strong>
+                    <span>{noteViewerError}</span>
+                  </div>
+                )}
 
+                {!noteViewerLoading && !noteViewerError && noteViewerUrl && viewingNote.mime_type === "application/pdf" && (
+                  <iframe
+                    title={viewingNote.file_name}
+                    src={noteViewerUrl}
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      border: "none",
+                      borderRadius: "10px",
+                      background: "#fff",
+                    }}
+                  />
+                )}
+
+                {!noteViewerLoading && !noteViewerError && noteViewerUrl && viewingNote.mime_type !== "application/pdf" && (
+                  <img
+                    src={noteViewerUrl}
+                    alt={viewingNote.title}
+                    style={{
+                      maxWidth: "100%",
+                      maxHeight: "100%",
+                      objectFit: "contain",
+                      borderRadius: "10px",
+                    }}
+                  />
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* =================================================
             ATTENDANCE
@@ -2183,29 +3556,6 @@ function Dashboard({
 
             </div>
 
-
-            {routineError && (
-              <div className="tasks-storage-note">
-                <strong>Routine Backend</strong>
-                <span>{routineError}</span>
-              </div>
-            )}
-
-            {attendanceError && (
-              <div className="tasks-storage-note">
-                <strong>Attendance Backend</strong>
-                <span>{attendanceError}</span>
-              </div>
-            )}
-
-            {routineLoading && (
-              <div className="tasks-storage-note">
-                <strong>Loading routine...</strong>
-                <span>
-                  Fetching your daily routine from PostgreSQL.
-                </span>
-              </div>
-            )}
 
             {/* DATE SELECTOR */}
 
@@ -2468,81 +3818,6 @@ function Dashboard({
               )}
 
 
-              {/* EDIT ROUTINE FORM */}
-
-              {editingRoutine && (
-                <form
-                  className="add-subject-form"
-                  onSubmit={updateRoutine}
-                >
-                  <div>
-                    <label>SUBJECT NAME</label>
-
-                    <input
-                      type="text"
-                      value={editRoutineName}
-                      onChange={(e) =>
-                        setEditRoutineName(e.target.value)
-                      }
-                      placeholder="Example: UHV"
-                      autoFocus
-                    />
-                  </div>
-
-                  <div>
-                    <label>DATE</label>
-
-                    <input
-                      type="date"
-                      value={editRoutineDate}
-                      onChange={(e) =>
-                        setEditRoutineDate(e.target.value)
-                      }
-                    />
-                  </div>
-
-                  <div>
-                    <label>START TIME</label>
-
-                    <input
-                      type="time"
-                      value={editRoutineStartTime}
-                      onChange={(e) =>
-                        setEditRoutineStartTime(e.target.value)
-                      }
-                    />
-                  </div>
-
-                  <div>
-                    <label>END TIME</label>
-
-                    <input
-                      type="time"
-                      value={editRoutineEndTime}
-                      onChange={(e) =>
-                        setEditRoutineEndTime(e.target.value)
-                      }
-                    />
-                  </div>
-
-                  <button
-                    type="submit"
-                    className="save-subject-button"
-                  >
-                    Save Changes
-                  </button>
-
-                  <button
-                    type="button"
-                    className="cancel-subject-button"
-                    onClick={cancelEditRoutine}
-                  >
-                    Cancel
-                  </button>
-                </form>
-              )}
-
-
               {/* SUBJECT LIST */}
 
               {todaySubjects.length === 0 ? (
@@ -2621,7 +3896,7 @@ function Dashboard({
                             className="routine-present"
                             onClick={() =>
                               markAttendance(
-                                subject,
+                                subject.id,
                                 "present"
                               )
                             }
@@ -2634,7 +3909,7 @@ function Dashboard({
                             className="routine-absent"
                             onClick={() =>
                               markAttendance(
-                                subject,
+                                subject.id,
                                 "absent"
                               )
                             }
@@ -2643,28 +3918,13 @@ function Dashboard({
                           </button>
 
 
-                          {!String(subject.id).startsWith("attendance-") && (
-                            <button
-                              type="button"
-                              className="routine-edit"
-                              onClick={() =>
-                                openEditRoutine(subject)
-                              }
-                              title="Edit routine"
-                              aria-label="Edit routine"
-                            >
-                              ✎
-                            </button>
-                          )}
-
                           <button
-                            type="button"
                             className="routine-delete"
                             onClick={() =>
-                              deleteSubject(subject)
+                              deleteSubject(
+                                subject.id
+                              )
                             }
-                            title="Delete routine"
-                            aria-label="Delete routine"
                           >
                             🗑
                           </button>
@@ -3020,13 +4280,738 @@ function Dashboard({
         )}
 
         {/* =================================================
+            FINANCE
+           ================================================= */}
+
+        {activePage === "Finance" && (
+          <section className="tasks-page">
+
+            <div className="tasks-header">
+
+              <div>
+                <span className="dashboard-label">
+                  PERSONAL FINANCE
+                </span>
+
+                <h1>
+                  Finance
+                </h1>
+
+                <p>
+                  Track your income, expenses, and personal balance in one place.
+                </p>
+              </div>
+
+              <button
+                className="tasks-add-button"
+                onClick={() => openFinanceForm(null, "expense")}
+                type="button"
+              >
+                ＋ Add Transaction
+              </button>
+
+            </div>
+
+            <div className="tasks-summary-grid">
+
+              <div className="task-summary-card">
+                <span>BALANCE</span>
+                <strong
+                  style={{
+                    color:
+                      financeCurrentBalance >= 0
+                        ? "#22c55e"
+                        : "#ef4444"
+                  }}
+                >
+                  ₹{formatFinanceAmount(financeCurrentBalance)}
+                </strong>
+                <small>Current tracked balance</small>
+              </div>
+
+              <div className="task-summary-card">
+                <span>INCOME</span>
+                <strong>
+                  ₹{formatFinanceAmount(financeTotalIncome)}
+                </strong>
+                <small>Total income</small>
+              </div>
+
+              <div className="task-summary-card">
+                <span>EXPENSE</span>
+                <strong>
+                  ₹{formatFinanceAmount(financeTotalExpense)}
+                </strong>
+                <small>Total expenses</small>
+              </div>
+
+              <div className="task-summary-card">
+                <span>THIS MONTH</span>
+                <strong>
+                  ₹{formatFinanceAmount(financeThisMonthExpense)}
+                </strong>
+                <small>Current month expenses</small>
+              </div>
+
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                gap: "12px",
+                marginBottom: "20px"
+              }}
+            >
+
+              <div className="tasks-storage-note">
+                <strong style={{ color: "#22c55e" }}>
+                  Total Money In
+                </strong>
+                <span>
+                  ₹{formatFinanceAmount(financeTotalIncome)}
+                </span>
+              </div>
+
+              <div className="tasks-storage-note">
+                <strong style={{ color: "#ef4444" }}>
+                  Total Money Out
+                </strong>
+                <span>
+                  ₹{formatFinanceAmount(financeTotalExpense)}
+                </span>
+              </div>
+
+              <div className="tasks-storage-note">
+                <strong
+                  style={{
+                    color:
+                      financeCurrentBalance >= 0
+                        ? "#22c55e"
+                        : "#ef4444"
+                  }}
+                >
+                  Current Balance
+                </strong>
+                <span>
+                  ₹{formatFinanceAmount(financeCurrentBalance)}
+                </span>
+              </div>
+
+              <div className="tasks-storage-note">
+                <strong>
+                  Days Tracked
+                </strong>
+                <span>
+                  {financeTotalDays} day{financeTotalDays === 1 ? "" : "s"}
+                </span>
+              </div>
+
+            </div>
+
+            {financeError && (
+              <div className="tasks-storage-note">
+                <strong>Finance</strong>
+                <span>{financeError}</span>
+              </div>
+            )}
+
+            {financeLoading && (
+              <div className="tasks-storage-note">
+                <strong>Loading finance...</strong>
+                <span>Fetching your transactions from PostgreSQL.</span>
+              </div>
+            )}
+
+            {showFinanceForm && (
+              <form
+                className="task-form-card"
+                onSubmit={saveFinanceTransaction}
+              >
+
+                <div className="task-form-heading">
+
+                  <div>
+                    <span>
+                      {editingFinanceId
+                        ? "EDIT TRANSACTION"
+                        : "NEW TRANSACTION"}
+                    </span>
+
+                    <h2>
+                      {editingFinanceId
+                        ? "Update transaction"
+                        : "Record your money"}
+                    </h2>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="task-form-close"
+                    onClick={resetFinanceForm}
+                    aria-label="Close finance form"
+                  >
+                    ×
+                  </button>
+
+                </div>
+
+                <div className="task-form-grid">
+
+                  <label>
+                    <span>Type</span>
+
+                    <select
+                      value={financeType}
+                      onChange={(e) => setFinanceType(e.target.value)}
+                    >
+                      <option value="expense">Expense</option>
+                      <option value="income">Income</option>
+                    </select>
+                  </label>
+
+                  <label>
+                    <span>Amount</span>
+
+                    <input
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      value={financeAmount}
+                      onChange={(e) => setFinanceAmount(e.target.value)}
+                      placeholder="e.g. 250"
+                      autoFocus
+                    />
+                  </label>
+
+                  <label>
+                    <span>Category</span>
+
+                    <input
+                      type="text"
+                      value={financeCategory}
+                      onChange={(e) => setFinanceCategory(e.target.value)}
+                      placeholder="e.g. Food, Petrol, Salary"
+                    />
+                  </label>
+
+                  <label>
+                    <span>Date</span>
+
+                    <input
+                      type="date"
+                      value={financeDate}
+                      onChange={(e) => setFinanceDate(e.target.value)}
+                    />
+                  </label>
+
+                  <label className="task-form-full">
+                    <span>Description / Note</span>
+
+                    <textarea
+                      value={financeDescription}
+                      onChange={(e) => setFinanceDescription(e.target.value)}
+                      placeholder="Optional note about this transaction..."
+                      rows="4"
+                    />
+                  </label>
+
+                </div>
+
+                <div className="task-form-actions">
+
+                  <button
+                    type="button"
+                    className="task-secondary-button"
+                    onClick={resetFinanceForm}
+                  >
+                    Cancel
+                  </button>
+
+                  <button
+                    type="submit"
+                    className="task-primary-button"
+                  >
+                    {editingFinanceId
+                      ? "Save Changes"
+                      : "Save Transaction"}
+                  </button>
+
+                </div>
+
+              </form>
+            )}
+
+            <div
+              className="tasks-list-card"
+              style={{ marginBottom: "20px" }}
+            >
+
+              <div className="tasks-list-header">
+
+                <div>
+                  <span>ACCOUNT SETTINGS</span>
+                  <h2>Balance & statements</h2>
+                </div>
+
+              </div>
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))",
+                  gap: "14px"
+                }}
+              >
+
+                <label>
+                  <span>Opening Balance</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={financeOpeningBalance}
+                    onChange={(e) =>
+                      setFinanceOpeningBalance(
+                        Number(e.target.value || 0)
+                      )
+                    }
+                    placeholder="Balance before tracking started"
+                    disabled={financeBalanceLoading || financeBalanceSaving}
+                  />
+
+                  <button
+                    type="button"
+                    className="task-primary-button"
+                    onClick={saveFinanceOpeningBalance}
+                    disabled={financeBalanceLoading || financeBalanceSaving}
+                    style={{ marginTop: "10px", width: "fit-content" }}
+                  >
+                    {financeBalanceSaving
+                      ? "Saving..."
+                      : "Save Opening Balance"}
+                  </button>
+
+                  {financeBalanceMessage && (
+                    <small
+                      style={{
+                        display: "block",
+                        marginTop: "8px",
+                        color: financeBalanceMessage.includes("saved")
+                          ? "#22c55e"
+                          : "#ef4444",
+                      }}
+                    >
+                      {financeBalanceMessage}
+                    </small>
+                  )}
+                </label>
+
+                <div className="tasks-storage-note">
+                  <strong>Current Balance</strong>
+                  <span
+                    style={{
+                      color:
+                        financeCurrentBalance >= 0
+                          ? "#22c55e"
+                          : "#ef4444",
+                      fontWeight: 900
+                    }}
+                  >
+                    ₹{formatFinanceAmount(financeCurrentBalance)}
+                  </span>
+                </div>
+
+              </div>
+
+              <p
+                style={{
+                  marginTop: "12px",
+                  opacity: 0.65,
+                  fontSize: "13px"
+                }}
+              >
+                Opening Balance is the bank/cash amount you already had before
+                starting EMPAIR finance tracking. Current Balance is calculated
+                as Opening Balance + Income - Expense.
+              </p>
+
+            </div>
+
+            <div
+              className="tasks-list-card"
+              style={{ marginBottom: "20px" }}
+            >
+
+              <div className="tasks-list-header">
+
+                <div>
+                  <span>STATEMENT CENTER</span>
+                  <h2>Generate your statement</h2>
+                </div>
+
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "8px",
+                    flexWrap: "wrap"
+                  }}
+                >
+
+                  <button
+                    type="button"
+                    className="task-secondary-button"
+                    onClick={downloadFinanceStatement}
+                  >
+                    ↓ CSV
+                  </button>
+
+                  <button
+                    type="button"
+                    className="task-primary-button"
+                    onClick={printFinanceStatement}
+                  >
+                    Print / PDF
+                  </button>
+
+                </div>
+
+              </div>
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                  gap: "10px"
+                }}
+              >
+
+                <button
+                  type="button"
+                  className="quick-action"
+                  onClick={() => setFinanceStatementMode("income")}
+                  style={{
+                    border:
+                      financeStatementMode === "income"
+                        ? "1px solid #22c55e"
+                        : undefined
+                  }}
+                >
+                  <span>↑</span>
+                  <strong>Income Only</strong>
+                  <small>Only money received, date-wise</small>
+                </button>
+
+                <button
+                  type="button"
+                  className="quick-action"
+                  onClick={() => setFinanceStatementMode("transactions")}
+                  style={{
+                    border:
+                      financeStatementMode === "transactions"
+                        ? "1px solid #8b5cf6"
+                        : undefined
+                  }}
+                >
+                  <span>▤</span>
+                  <strong>Transaction Statement</strong>
+                  <small>Bank-style credit, debit & balance</small>
+                </button>
+
+                <button
+                  type="button"
+                  className="quick-action"
+                  onClick={() => setFinanceStatementMode("full")}
+                  style={{
+                    border:
+                      financeStatementMode === "full"
+                        ? "1px solid #8b5cf6"
+                        : undefined
+                  }}
+                >
+                  <span>▦</span>
+                  <strong>Full History</strong>
+                  <small>Complete finance history</small>
+                </button>
+
+              </div>
+
+              <div
+                className="tasks-storage-note"
+                style={{ marginTop: "14px" }}
+              >
+                <strong>
+                  {financeStatementMode === "income"
+                    ? "Income Report"
+                    : financeStatementMode === "transactions"
+                      ? "Transaction Statement"
+                      : "Full Finance History"}
+                </strong>
+
+                <span>
+                  {financeStatementMode === "income"
+                    ? `${financeIncomeStatement.length} income transaction${financeIncomeStatement.length === 1 ? "" : "s"} selected.`
+                    : financeStatementMode === "transactions"
+                      ? `${financeTransactionStatement.length} transaction${financeTransactionStatement.length === 1 ? "" : "s"} selected with running balance.`
+                      : `${financeFullHistory.length} transaction${financeFullHistory.length === 1 ? "" : "s"} selected.`}
+                </span>
+              </div>
+
+            </div>
+
+            <div className="tasks-list-card">
+
+              <div className="tasks-list-header">
+
+                <div>
+                  <span>TRANSACTION HISTORY</span>
+                  <h2>Your transactions</h2>
+                </div>
+
+                <button
+                  type="button"
+                  className="tasks-add-button"
+                  onClick={() => openFinanceForm(null, "income")}
+                >
+                  ＋ Add Income
+                </button>
+
+              </div>
+
+              {financeTransactions.length === 0 ? (
+
+                <div className="tasks-empty-state">
+
+                  <div>₹</div>
+
+                  <h3>
+                    No transactions yet
+                  </h3>
+
+                  <p>
+                    Add your first income or expense to start tracking your finances.
+                  </p>
+
+                  <button
+                    type="button"
+                    className="task-primary-button"
+                    onClick={() => openFinanceForm(null, "expense")}
+                  >
+                    ＋ Add Transaction
+                  </button>
+
+                </div>
+
+              ) : (
+
+                <div className="tasks-list">
+
+                  {financeDailyGroups.map((day) => {
+
+                    return (
+                      <div
+                        key={day.date}
+                        style={{
+                          marginBottom: "24px",
+                          padding: "18px",
+                          borderRadius: "18px",
+                          border: "1px solid rgba(255,255,255,0.08)",
+                          background: "rgba(255,255,255,0.025)"
+                        }}
+                      >
+
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "flex-start",
+                            gap: "16px",
+                            marginBottom: "14px",
+                            flexWrap: "wrap"
+                          }}
+                        >
+
+                          <div>
+                            <span
+                              style={{
+                                display: "block",
+                                fontSize: "12px",
+                                fontWeight: 700,
+                                opacity: 0.6,
+                                letterSpacing: "0.08em",
+                                marginBottom: "4px"
+                              }}
+                            >
+                              DAY
+                            </span>
+
+                            <h3 style={{ margin: 0 }}>
+                              {formatFinanceDate(day.date)}
+                            </h3>
+                          </div>
+
+                          <div
+                            style={{
+                              display: "flex",
+                              gap: "18px",
+                              flexWrap: "wrap",
+                              alignItems: "center"
+                            }}
+                          >
+
+                            <span style={{ color: "#22c55e", fontWeight: 800 }}>
+                              +₹{formatFinanceAmount(day.income)}
+                            </span>
+
+                            <span style={{ color: "#ef4444", fontWeight: 800 }}>
+                              -₹{formatFinanceAmount(day.expense)}
+                            </span>
+
+                            <span
+                              style={{
+                                color:
+                                  day.closingBalance >= 0
+                                    ? "#22c55e"
+                                    : "#ef4444",
+                                fontWeight: 900
+                              }}
+                            >
+                              Balance ₹{formatFinanceAmount(day.closingBalance)}
+                            </span>
+
+                          </div>
+
+                        </div>
+
+                        <div style={{ display: "grid", gap: "10px" }}>
+
+                          {day.transactions.map((transaction) => (
+
+                            <article
+                              className="task-item"
+                              key={transaction.id}
+                            >
+
+                              <div
+                                className="task-check-button"
+                                style={{
+                                  borderLeft: `4px solid ${
+                                    transaction.type === "income"
+                                      ? "#22c55e"
+                                      : "#ef4444"
+                                  }`,
+                                  background:
+                                    transaction.type === "income"
+                                      ? "rgba(34, 197, 94, 0.08)"
+                                      : "rgba(239, 68, 68, 0.08)"
+                                }}
+                              >
+                                {transaction.type === "income" ? "↑" : "↓"}
+                              </div>
+
+                              <div className="task-item-main">
+
+                                <div className="task-item-top">
+
+                                  <h3>
+                                    {transaction.category}
+                                  </h3>
+
+                                  <span
+                                    className={`task-priority ${
+                                      transaction.type === "income"
+                                        ? "low"
+                                        : "high"
+                                    }`}
+                                  >
+                                    {transaction.type.toUpperCase()}
+                                  </span>
+
+                                </div>
+
+                                <p>
+                                  {transaction.description || "No description"}
+                                </p>
+
+                                <div className="task-item-meta">
+
+                                  <span>
+                                    Balance after transaction
+                                  </span>
+
+                                  <strong
+                                    style={{
+                                      color:
+                                        transaction.running_balance >= 0
+                                          ? "#22c55e"
+                                          : "#ef4444",
+                                      fontWeight: 900
+                                    }}
+                                  >
+                                    ₹{formatFinanceAmount(transaction.running_balance)}
+                                  </strong>
+
+                                </div>
+
+                              </div>
+
+                              <div className="task-item-actions">
+
+                                <button
+                                  type="button"
+                                  onClick={() => openFinanceForm(transaction)}
+                                  aria-label="Edit transaction"
+                                  title="Edit transaction"
+                                >
+                                  ✎
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => deleteFinanceTransaction(transaction.id)}
+                                  aria-label="Delete transaction"
+                                  title="Delete transaction"
+                                >
+                                  🗑
+                                </button>
+
+                              </div>
+
+                            </article>
+
+                          ))}
+
+                        </div>
+
+                      </div>
+                    );
+                  })}
+
+                </div>
+
+              )}
+
+            </div>
+
+            <div className="tasks-storage-note">
+              <strong>PostgreSQL connected</strong>
+              <span>
+                Your finance transactions are stored through the EMPAIR backend and persist after refresh.
+              </span>
+            </div>
+
+          </section>
+        )}
+
+        {/* =================================================
             OTHER MODULES
            ================================================= */}
 
         {activePage !== "Dashboard" &&
           activePage !== "My Journey" &&
           activePage !== "Tasks" &&
-          activePage !== "Attendance" && (
+          activePage !== "Attendance" &&
+          activePage !== "Finance" && (
 
             <section className="page-placeholder">
 
