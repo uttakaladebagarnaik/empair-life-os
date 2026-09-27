@@ -8,6 +8,8 @@ const tasksRoutes = require("./routes/tasksRoutes");
 const authRoutes = require("./routes/authRoutes");
 const attendanceRoutes = require("./routes/attendanceRoutes");
 const routineRoutes = require("./routes/routineRoutes");
+const journeyRoutes = require("./routes/journeyRoutes");
+const journeyNotesRoutes = require("./routes/journeyNotesRoutes");
 
 const authenticateToken = require("./middleware/authMiddleware");
 
@@ -16,18 +18,30 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 
-// ============================================
+const financeRoutes = require("./routes/financeRoutes");
+
+// =====================================================
 // MIDDLEWARE
-// ============================================
+// =====================================================
 
 app.use(cors());
 
 app.use(express.json());
 
 
-// ============================================
-// ROOT ROUTE
-// ============================================
+// =====================================================
+// ROOT
+// =====================================================
+
+
+
+app.use(
+    "/api/finance",
+    authenticateToken,
+    financeRoutes
+);
+
+
 
 app.get("/", (req, res) => {
     res.json({
@@ -38,9 +52,9 @@ app.get("/", (req, res) => {
 });
 
 
-// ============================================
-// DATABASE HEALTH CHECK
-// ============================================
+// =====================================================
+// HEALTH CHECK
+// =====================================================
 
 app.get("/api/health", async (req, res) => {
     try {
@@ -57,6 +71,7 @@ app.get("/api/health", async (req, res) => {
         });
 
     } catch (error) {
+
         console.error(
             "Database connection failed:",
             error.message
@@ -71,9 +86,9 @@ app.get("/api/health", async (req, res) => {
 });
 
 
-// ============================================
+// =====================================================
 // AUTH ROUTES
-// ============================================
+// =====================================================
 
 app.use(
     "/api/auth",
@@ -81,10 +96,14 @@ app.use(
 );
 
 
-// ============================================
-// TASK ROUTES
-// Protected by JWT
-// ============================================
+// =====================================================
+// PROTECTED ROUTES
+// =====================================================
+
+
+// =====================================================
+// TASKS
+// =====================================================
 
 app.use(
     "/api/tasks",
@@ -93,10 +112,9 @@ app.use(
 );
 
 
-// ============================================
-// ATTENDANCE ROUTES
-// Protected by JWT
-// ============================================
+// =====================================================
+// ATTENDANCE
+// =====================================================
 
 app.use(
     "/api/attendance",
@@ -105,10 +123,9 @@ app.use(
 );
 
 
-// ============================================
-// DAILY ROUTINE ROUTES
-// Protected by JWT
-// ============================================
+// =====================================================
+// DAILY ROUTINE
+// =====================================================
 
 app.use(
     "/api/routine",
@@ -117,24 +134,50 @@ app.use(
 );
 
 
-// ============================================
+// =====================================================
+// MY JOURNEY
+// =====================================================
+
+app.use(
+    "/api/journey",
+    authenticateToken,
+    journeyRoutes
+);
+
+
+// =====================================================
+// MY JOURNEY NOTES
+// =====================================================
+
+app.use(
+    "/api/journey-notes",
+    authenticateToken,
+    journeyNotesRoutes
+);
+
+
+// =====================================================
 // 404 ROUTE
-// ============================================
+// =====================================================
 
 app.use((req, res) => {
+
     res.status(404).json({
         success: false,
         message: "Route not found"
     });
+
 });
 
 
-// ============================================
+// =====================================================
 // START SERVER
-// ============================================
+// =====================================================
 
 app.listen(PORT, () => {
+
     console.log(
         `🚀 EMPAIR Backend running on http://localhost:${PORT}`
     );
+
 });
