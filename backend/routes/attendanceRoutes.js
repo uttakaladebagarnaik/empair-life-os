@@ -4,16 +4,22 @@ const pool = require("../config/db");
 const router = express.Router();
 
 
-// ============================================
+// =====================================================
 // GET ALL ATTENDANCE
-// ============================================
+// =====================================================
 
 router.get("/", async (req, res) => {
     try {
         const userId = req.user.userId;
 
         const result = await pool.query(
-            `SELECT *
+            `SELECT
+                id,
+                user_id,
+                subject,
+                attendance_date::text AS attendance_date,
+                status,
+                created_at
              FROM attendance
              WHERE user_id = $1
              ORDER BY attendance_date DESC, id DESC`,
@@ -39,9 +45,9 @@ router.get("/", async (req, res) => {
 });
 
 
-// ============================================
+// =====================================================
 // GET ATTENDANCE BY DATE
-// ============================================
+// =====================================================
 
 router.get("/date/:date", async (req, res) => {
     try {
@@ -49,7 +55,13 @@ router.get("/date/:date", async (req, res) => {
         const { date } = req.params;
 
         const result = await pool.query(
-            `SELECT *
+            `SELECT
+                id,
+                user_id,
+                subject,
+                attendance_date::text AS attendance_date,
+                status,
+                created_at
              FROM attendance
              WHERE user_id = $1
              AND attendance_date = $2
@@ -70,15 +82,16 @@ router.get("/date/:date", async (req, res) => {
 
         res.status(500).json({
             success: false,
-            message: "Failed to fetch attendance for date"
+            message:
+                "Failed to fetch attendance for date"
         });
     }
 });
 
 
-// ============================================
+// =====================================================
 // CREATE ATTENDANCE
-// ============================================
+// =====================================================
 
 router.post("/", async (req, res) => {
     try {
@@ -102,13 +115,18 @@ router.post("/", async (req, res) => {
         if (!attendance_date) {
             return res.status(400).json({
                 success: false,
-                message: "Attendance date is required"
+                message:
+                    "Attendance date is required"
             });
         }
 
 
         if (
-            !["pending", "present", "absent"].includes(status)
+            ![
+                "pending",
+                "present",
+                "absent"
+            ].includes(status)
         ) {
             return res.status(400).json({
                 success: false,
@@ -120,9 +138,27 @@ router.post("/", async (req, res) => {
 
         const result = await pool.query(
             `INSERT INTO attendance
-             (user_id, subject, attendance_date, status)
-             VALUES ($1, $2, $3, $4)
-             RETURNING *`,
+                (
+                    user_id,
+                    subject,
+                    attendance_date,
+                    status
+                )
+             VALUES
+                (
+                    $1,
+                    $2,
+                    $3,
+                    $4
+                )
+
+             RETURNING
+                id,
+                user_id,
+                subject,
+                attendance_date::text AS attendance_date,
+                status,
+                created_at`,
             [
                 userId,
                 subject.trim(),
@@ -134,7 +170,8 @@ router.post("/", async (req, res) => {
 
         res.status(201).json({
             success: true,
-            message: "Attendance created successfully",
+            message:
+                "Attendance created successfully",
             attendance: result.rows[0]
         });
 
@@ -156,15 +193,16 @@ router.post("/", async (req, res) => {
 
         res.status(500).json({
             success: false,
-            message: "Failed to create attendance"
+            message:
+                "Failed to create attendance"
         });
     }
 });
 
 
-// ============================================
+// =====================================================
 // UPDATE ATTENDANCE
-// ============================================
+// =====================================================
 
 router.put("/:id", async (req, res) => {
     try {
@@ -180,7 +218,11 @@ router.put("/:id", async (req, res) => {
 
         if (
             status !== undefined &&
-            !["pending", "present", "absent"].includes(status)
+            ![
+                "pending",
+                "present",
+                "absent"
+            ].includes(status)
         ) {
             return res.status(400).json({
                 success: false,
@@ -193,22 +235,39 @@ router.put("/:id", async (req, res) => {
         const result = await pool.query(
             `UPDATE attendance
              SET
-                subject = COALESCE($1, subject),
-                attendance_date = COALESCE($2, attendance_date),
-                status = COALESCE($3, status)
+                subject = COALESCE(
+                    $1,
+                    subject
+                ),
+
+                attendance_date = COALESCE(
+                    $2,
+                    attendance_date
+                ),
+
+                status = COALESCE(
+                    $3,
+                    status
+                )
+
              WHERE id = $4
              AND user_id = $5
-             RETURNING *`,
+
+             RETURNING
+                id,
+                user_id,
+                subject,
+                attendance_date::text AS attendance_date,
+                status,
+                created_at`,
             [
                 subject
                     ? subject.trim()
                     : null,
 
-                attendance_date
-                    || null,
+                attendance_date || null,
 
-                status
-                    || null,
+                status || null,
 
                 id,
                 userId
@@ -229,9 +288,7 @@ router.put("/:id", async (req, res) => {
             success: true,
             message:
                 "Attendance updated successfully",
-
-            attendance:
-                result.rows[0]
+            attendance: result.rows[0]
         });
 
     } catch (error) {
@@ -259,9 +316,9 @@ router.put("/:id", async (req, res) => {
 });
 
 
-// ============================================
+// =====================================================
 // DELETE ATTENDANCE
-// ============================================
+// =====================================================
 
 router.delete("/:id", async (req, res) => {
     try {
@@ -273,7 +330,14 @@ router.delete("/:id", async (req, res) => {
             `DELETE FROM attendance
              WHERE id = $1
              AND user_id = $2
-             RETURNING *`,
+
+             RETURNING
+                id,
+                user_id,
+                subject,
+                attendance_date::text AS attendance_date,
+                status,
+                created_at`,
             [
                 id,
                 userId
@@ -294,9 +358,7 @@ router.delete("/:id", async (req, res) => {
             success: true,
             message:
                 "Attendance deleted successfully",
-
-            attendance:
-                result.rows[0]
+            attendance: result.rows[0]
         });
 
     } catch (error) {
@@ -304,7 +366,6 @@ router.delete("/:id", async (req, res) => {
             "DELETE ATTENDANCE ERROR:",
             error.message
         );
-
 
         res.status(500).json({
             success: false,

@@ -7,6 +7,7 @@ const pool = require("./config/db");
 const tasksRoutes = require("./routes/tasksRoutes");
 const authRoutes = require("./routes/authRoutes");
 const attendanceRoutes = require("./routes/attendanceRoutes");
+const routineRoutes = require("./routes/routineRoutes");
 
 const authenticateToken = require("./middleware/authMiddleware");
 
@@ -20,29 +21,29 @@ const PORT = process.env.PORT || 5000;
 // ============================================
 
 app.use(cors());
+
 app.use(express.json());
 
 
 // ============================================
-// ROOT
+// ROOT ROUTE
 // ============================================
 
 app.get("/", (req, res) => {
     res.json({
         success: true,
         message: "EMPAIR Backend is running 🚀",
-        version: "v0.8.0"
+        version: "v0.9.0"
     });
 });
 
 
 // ============================================
-// HEALTH CHECK
+// DATABASE HEALTH CHECK
 // ============================================
 
 app.get("/api/health", async (req, res) => {
     try {
-
         const result = await pool.query(
             "SELECT NOW()"
         );
@@ -56,7 +57,6 @@ app.get("/api/health", async (req, res) => {
         });
 
     } catch (error) {
-
         console.error(
             "Database connection failed:",
             error.message
@@ -82,7 +82,8 @@ app.use(
 
 
 // ============================================
-// PROTECTED TASK ROUTES
+// TASK ROUTES
+// Protected by JWT
 // ============================================
 
 app.use(
@@ -93,7 +94,8 @@ app.use(
 
 
 // ============================================
-// PROTECTED ATTENDANCE ROUTES
+// ATTENDANCE ROUTES
+// Protected by JWT
 // ============================================
 
 app.use(
@@ -104,7 +106,19 @@ app.use(
 
 
 // ============================================
-// 404 HANDLER
+// DAILY ROUTINE ROUTES
+// Protected by JWT
+// ============================================
+
+app.use(
+    "/api/routine",
+    authenticateToken,
+    routineRoutes
+);
+
+
+// ============================================
+// 404 ROUTE
 // ============================================
 
 app.use((req, res) => {
@@ -120,9 +134,7 @@ app.use((req, res) => {
 // ============================================
 
 app.listen(PORT, () => {
-
     console.log(
         `🚀 EMPAIR Backend running on http://localhost:${PORT}`
     );
-
 });
